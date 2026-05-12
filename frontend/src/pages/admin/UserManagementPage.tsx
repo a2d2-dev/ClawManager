@@ -1,13 +1,17 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import AdminLayout from '../../components/AdminLayout';
 import { useI18n } from '../../contexts/I18nContext';
 import { userService } from '../../services/userService';
 import type { CreateUserRequest, ImportUsersResponse } from '../../services/userService';
 import type { User, UserQuota } from '../../types/user';
 
+const USERS_PAGE_SIZE = 20;
+
 const UserManagementPage: React.FC = () => {
   const { t } = useI18n();
   const [users, setUsers] = useState<User[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalUsers, setTotalUsers] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
@@ -29,23 +33,40 @@ const UserManagementPage: React.FC = () => {
     role: 'user',
   });
 
-  useEffect(() => {
-    void loadUsers();
-  }, []);
-
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async (targetPage: number) => {
     try {
       setLoading(true);
       setError(null);
-      const data = await userService.getUsers();
+      const data = await userService.getUsers(targetPage, USERS_PAGE_SIZE);
+      const total = data.total || 0;
+      const maxPage = Math.max(1, Math.ceil(total / USERS_PAGE_SIZE));
+
+      if (targetPage > maxPage) {
+        setUsers([]);
+        setTotalUsers(total);
+        setPage(maxPage);
+        return;
+      }
+
       setUsers(data.users || []);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.loadFailed'));
+      setTotalUsers(total);
+      setPage(data.page || targetPage);
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.loadFailed')));
       setUsers([]);
+      setTotalUsers(0);
     } finally {
       setLoading(false);
     }
-  };
+  }, [t]);
+
+  useEffect(() => {
+    void loadUsers(page);
+  }, [loadUsers, page]);
+
+  const totalPages = Math.max(1, Math.ceil(totalUsers / USERS_PAGE_SIZE));
+  const showingFrom = totalUsers === 0 ? 0 : (page - 1) * USERS_PAGE_SIZE + 1;
+  const showingTo = Math.min(page * USERS_PAGE_SIZE, totalUsers);
 
   const handleDeleteClick = (user: User) => {
     setUserToDelete(user);
@@ -57,11 +78,13 @@ const UserManagementPage: React.FC = () => {
 
     try {
       await userService.deleteUser(userToDelete.id);
-      setUsers((current) => current.filter((user) => user.id !== userToDelete.id));
+      const nextTotal = Math.max(0, totalUsers - 1);
+      const nextPage = Math.min(page, Math.max(1, Math.ceil(nextTotal / USERS_PAGE_SIZE)));
       setShowDeleteModal(false);
       setUserToDelete(null);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.deleteFailed'));
+      await loadUsers(nextPage);
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.deleteFailed')));
     }
   };
 
@@ -76,8 +99,8 @@ const UserManagementPage: React.FC = () => {
       setQuota(userQuota);
       setSelectedUser(user);
       setShowQuotaModal(true);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.loadQuotaFailed'));
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.loadQuotaFailed')));
     }
   };
 
@@ -95,8 +118,8 @@ const UserManagementPage: React.FC = () => {
       setShowQuotaModal(false);
       setSelectedUser(null);
       setQuota(null);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.updateQuotaFailed'));
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.updateQuotaFailed')));
     }
   };
 
@@ -115,19 +138,19 @@ const UserManagementPage: React.FC = () => {
       )));
       setShowRoleModal(false);
       setSelectedUser(null);
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.updateRoleFailed'));
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.updateRoleFailed')));
     }
   };
 
   const handleAddUser = async () => {
     try {
-      const created = await userService.createUser(newUser);
-      setUsers((current) => [...current, created]);
+      await userService.createUser(newUser);
       setShowAddModal(false);
       setNewUser({ username: '', email: '', password: '', role: 'user' });
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.createFailed'));
+      await loadUsers(page);
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.createFailed')));
     }
   };
 
@@ -144,9 +167,9 @@ const UserManagementPage: React.FC = () => {
       setImportResult(result);
       setShowImportModal(false);
       setImportFile(null);
-      await loadUsers();
-    } catch (err: any) {
-      setError(err.response?.data?.error || t('userManagementPage.importFailed'));
+      await loadUsers(1);
+    } catch (err: unknown) {
+      setError(getRequestErrorMessage(err, t('userManagementPage.importFailed')));
     } finally {
       setImporting(false);
     }
@@ -274,83 +297,124 @@ const UserManagementPage: React.FC = () => {
         )}
 
         <div className="app-panel">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('auth.username')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('auth.email')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('admin.role')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('common.status')}
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('common.createdAt')}
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  {t('aiAuditPage.action')}
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {users.map((user) => (
-                <tr key={user.id}>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">{user.username}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-500">{user.email}</div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      user.role === 'admin'
-                        ? 'bg-purple-100 text-purple-800'
-                        : 'bg-green-100 text-green-800'
-                    }`}>
-                      {user.role === 'admin' ? t('common.admin') : t('common.user')}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                      user.is_active
-                        ? 'bg-green-100 text-green-800'
-                        : 'bg-red-100 text-red-800'
-                    }`}>
-                      {user.is_active ? t('modelManagementPage.active') : t('modelManagementPage.inactive')}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {new Date(user.created_at).toLocaleDateString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <button
-                      onClick={() => handleEditQuota(user)}
-                      className="text-indigo-600 hover:text-indigo-900 mr-4"
-                    >
-                      {t('userManagementPage.quota')}
-                    </button>
-                    <button
-                      onClick={() => handleEditRole(user)}
-                      className="text-indigo-600 hover:text-indigo-900 mr-4"
-                    >
+          {users.length === 0 ? (
+            <div className="px-6 py-12 text-center text-sm text-gray-500">
+              {t('userManagementPage.noUsers')}
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('auth.username')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('auth.email')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       {t('admin.role')}
-                    </button>
-                    <button
-                      onClick={() => handleDeleteClick(user)}
-                      className="text-red-600 hover:text-red-900"
-                    >
-                      {t('common.delete')}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('common.status')}
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('common.createdAt')}
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      {t('aiAuditPage.action')}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {users.map((user) => (
+                    <tr key={user.id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">{user.username}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-500">{user.email}</div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          user.role === 'admin'
+                            ? 'bg-purple-100 text-purple-800'
+                            : 'bg-green-100 text-green-800'
+                        }`}>
+                          {user.role === 'admin' ? t('common.admin') : t('common.user')}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                          user.is_active
+                            ? 'bg-green-100 text-green-800'
+                            : 'bg-red-100 text-red-800'
+                        }`}>
+                          {user.is_active ? t('modelManagementPage.active') : t('modelManagementPage.inactive')}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {new Date(user.created_at).toLocaleDateString()}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <button
+                          onClick={() => handleEditQuota(user)}
+                          className="text-indigo-600 hover:text-indigo-900 mr-4"
+                        >
+                          {t('userManagementPage.quota')}
+                        </button>
+                        <button
+                          onClick={() => handleEditRole(user)}
+                          className="text-indigo-600 hover:text-indigo-900 mr-4"
+                        >
+                          {t('admin.role')}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClick(user)}
+                          className="text-red-600 hover:text-red-900"
+                        >
+                          {t('common.delete')}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {totalUsers > 0 && (
+            <div className="flex flex-col gap-3 border-t border-gray-200 px-6 py-4 text-sm text-gray-500 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                {t('userManagementPage.showingUsers', {
+                  from: showingFrom,
+                  to: showingTo,
+                  total: totalUsers,
+                })}
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  disabled={page <= 1}
+                  className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t('admin.prev')}
+                </button>
+                <span>
+                  {t('admin.pageSummary', { page, total: totalPages })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  disabled={page >= totalPages}
+                  className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {t('admin.nextPage')}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -625,6 +689,17 @@ function FieldNumber({
       />
     </div>
   );
+}
+
+function getRequestErrorMessage(err: unknown, fallback: string) {
+  if (typeof err === 'object' && err !== null && 'response' in err) {
+    const response = (err as { response?: { data?: { error?: unknown } } }).response;
+    if (typeof response?.data?.error === 'string') {
+      return response.data.error;
+    }
+  }
+
+  return fallback;
 }
 
 export default UserManagementPage;

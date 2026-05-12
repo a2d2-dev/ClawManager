@@ -100,7 +100,7 @@ func (r *userRepository) Delete(id int) error {
 // List returns a list of users with pagination
 func (r *userRepository) List(offset, limit int) ([]models.User, error) {
 	var users []models.User
-	err := r.sess.Collection("users").Find().Offset(offset).Limit(limit).All(&users)
+	err := r.sess.Collection("users").Find().OrderBy("id").Offset(offset).Limit(limit).All(&users)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list users: %w", err)
 	}

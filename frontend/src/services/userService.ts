@@ -4,7 +4,8 @@ import type {
   UserQuota, 
   UpdateUserRequest, 
   UpdateRoleRequest, 
-  UpdateQuotaRequest 
+  UpdateQuotaRequest,
+  ListUsersResponse,
 } from '../types/user';
 
 export interface CreateUserRequest {
@@ -54,11 +55,11 @@ export const userService = {
   },
 
   // Get all users (admin only)
-  getUsers: async (page = 1, limit = 20): Promise<{ users: User[]; total: number }> => {
+  getUsers: async (page = 1, limit = 20): Promise<ListUsersResponse> => {
     const response = await api.get('/users', {
       params: { page, limit }
     });
-    return response.data.data || { users: [], total: 0 };
+    return response.data.data || { users: [], total: 0, page, limit };
   },
 
   // Get user by ID
