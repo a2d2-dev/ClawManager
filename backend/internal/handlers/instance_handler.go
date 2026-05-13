@@ -38,6 +38,7 @@ type InstanceHandler struct {
 	instanceConfigRevisionService services.InstanceConfigRevisionService
 	accessService                 *services.InstanceAccessService
 	proxyService                  *services.InstanceProxyService
+	shellService                  *services.InstanceShellService
 	openClawTransferService       services.OpenClawTransferService
 	openClawConfigService         services.OpenClawConfigService
 	skillService                  services.SkillService
@@ -54,6 +55,7 @@ func NewInstanceHandler(instanceService services.InstanceService, instanceAgentS
 		instanceConfigRevisionService: instanceConfigRevisionService,
 		accessService:                 accessService,
 		proxyService:                  services.NewInstanceProxyService(accessService),
+		shellService:                  services.NewInstanceShellService(),
 		openClawTransferService:       services.NewOpenClawTransferService(),
 		openClawConfigService:         openClawConfigService,
 		skillService:                  skillService,
@@ -86,6 +88,7 @@ type CreateInstanceRequest struct {
 	Name                 string                       `json:"name" binding:"required,min=3,max=50"`
 	Description          *string                      `json:"description,omitempty"`
 	Type                 string                       `json:"type" binding:"required,oneof=openclaw ubuntu debian centos custom webtop hermes"`
+	RuntimeType          string                       `json:"runtime_type" binding:"omitempty,oneof=desktop shell"`
 	CPUCores             float64                      `json:"cpu_cores" binding:"required,min=0.1,max=32"`
 	MemoryGB             int                          `json:"memory_gb" binding:"required,min=1,max=128"`
 	DiskGB               int                          `json:"disk_gb" binding:"required,min=10,max=1000"`
@@ -192,6 +195,7 @@ func (h *InstanceHandler) CreateInstance(c *gin.Context) {
 		Name:                 req.Name,
 		Description:          req.Description,
 		Type:                 req.Type,
+		RuntimeType:          req.RuntimeType,
 		CPUCores:             req.CPUCores,
 		MemoryGB:             req.MemoryGB,
 		DiskGB:               req.DiskGB,
@@ -715,6 +719,11 @@ func (h *InstanceHandler) GenerateAccessToken(c *gin.Context) {
 		return
 	}
 
+	if strings.EqualFold(strings.TrimSpace(instance.RuntimeType), "shell") {
+		utils.Error(c, http.StatusBadRequest, "Desktop access is not available for shell runtime instances")
+		return
+	}
+
 	// Generate proxy entry URL. The actual Service remains internal-only.
 	accessURL := h.proxyService.GetProxyURL(instance.ID, "")
 
@@ -791,6 +800,31 @@ func (h *InstanceHandler) AccessInstance(c *gin.Context) {
 
 	// Redirect to actual access URL
 	c.Redirect(http.StatusTemporaryRedirect, accessToken.AccessURL)
+}
+
+func (h *InstanceHandler) StreamShell(c *gin.Context) {
+	instance, ok := h.requireOwnedInstance(c)
+	if !ok {
+		return
+	}
+
+	if !strings.EqualFold(strings.TrimSpace(instance.RuntimeType), "shell") {
+		utils.Error(c, http.StatusBadRequest, "Shell access is only available for shell runtime instances")
+		return
+	}
+
+	if instance.Status != "running" {
+		utils.Error(c, http.StatusBadRequest, "Instance is not running")
+		return
+	}
+
+	if err := h.shellService.Stream(c.Request.Context(), instance.UserID, instance.ID, c.Writer, c.Request); err != nil {
+		if !c.Writer.Written() {
+			utils.HandleError(c, err)
+			return
+		}
+		fmt.Printf("Shell stream for instance %d closed with error: %v\n", instance.ID, err)
+	}
 }
 
 // ForceSync manually triggers a status sync

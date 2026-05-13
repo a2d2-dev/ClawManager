@@ -36,6 +36,7 @@ func (r *systemImageSettingRepository) ensureTable() {
 CREATE TABLE IF NOT EXISTS system_image_settings (
   id INT AUTO_INCREMENT PRIMARY KEY,
   instance_type VARCHAR(50) NOT NULL,
+  runtime_type ENUM('desktop', 'shell') NOT NULL DEFAULT 'desktop',
   display_name VARCHAR(255) NOT NULL,
   image VARCHAR(500) NOT NULL,
   is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS system_image_settings (
 	}
 
 	r.ensureIsEnabledColumn()
+	r.ensureRuntimeTypeColumn()
 	r.ensureInstanceTypeIsNotUnique()
 	r.ensureInstanceTypeIndex()
 }
@@ -73,6 +75,29 @@ WHERE table_schema = DATABASE()
 	if count == 0 {
 		if _, err := r.sess.SQL().Exec("ALTER TABLE system_image_settings ADD COLUMN is_enabled BOOLEAN NOT NULL DEFAULT TRUE"); err != nil {
 			panic(fmt.Errorf("failed to ensure system_image_settings.is_enabled column: %w", err))
+		}
+	}
+}
+
+func (r *systemImageSettingRepository) ensureRuntimeTypeColumn() {
+	var count int
+	row, err := r.sess.SQL().QueryRow(`
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+  AND table_name = 'system_image_settings'
+  AND column_name = 'runtime_type'
+`)
+	if err != nil {
+		panic(fmt.Errorf("failed to inspect system_image_settings runtime_type column: %w", err))
+	}
+	if err := row.Scan(&count); err != nil {
+		panic(fmt.Errorf("failed to scan system_image_settings runtime_type column count: %w", err))
+	}
+
+	if count == 0 {
+		if _, err := r.sess.SQL().Exec("ALTER TABLE system_image_settings ADD COLUMN runtime_type ENUM('desktop', 'shell') NOT NULL DEFAULT 'desktop' AFTER instance_type"); err != nil {
+			panic(fmt.Errorf("failed to ensure system_image_settings.runtime_type column: %w", err))
 		}
 	}
 }
@@ -135,7 +160,7 @@ WHERE table_schema = DATABASE()
 
 func (r *systemImageSettingRepository) List() ([]models.SystemImageSetting, error) {
 	var settings []models.SystemImageSetting
-	if err := r.sess.Collection("system_image_settings").Find().OrderBy("instance_type", "-updated_at", "-id").All(&settings); err != nil {
+	if err := r.sess.Collection("system_image_settings").Find().OrderBy("instance_type", "runtime_type", "-updated_at", "-id").All(&settings); err != nil {
 		return nil, fmt.Errorf("failed to list system image settings: %w", err)
 	}
 	return settings, nil
@@ -173,6 +198,7 @@ func (r *systemImageSettingRepository) Save(setting *models.SystemImageSetting) 
 		}
 
 		existing.InstanceType = setting.InstanceType
+		existing.RuntimeType = setting.RuntimeType
 		existing.DisplayName = setting.DisplayName
 		existing.Image = setting.Image
 		existing.IsEnabled = setting.IsEnabled

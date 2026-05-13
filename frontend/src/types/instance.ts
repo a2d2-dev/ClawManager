@@ -14,6 +14,7 @@ export interface Instance {
     | "custom"
     | "webtop"
     | "hermes";
+  runtime_type: "desktop" | "shell";
   status: "creating" | "running" | "stopped" | "error" | "deleting";
   cpu_cores: number;
   memory_gb: number;
@@ -124,6 +125,7 @@ export interface CreateInstanceRequest {
     | "custom"
     | "webtop"
     | "hermes";
+  runtime_type?: "desktop" | "shell";
   cpu_cores: number;
   memory_gb: number;
   disk_gb: number;

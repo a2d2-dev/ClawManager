@@ -105,6 +105,11 @@ func buildInstancePodEnv(instance *models.Instance, runtimeEnv, gatewayEnv, agen
 
 	resolved := mergeEnvMaps(runtimeEnv, mergeEnvMaps(gatewayEnv, agentEnv))
 	resolved = withInstanceProxyEnv(instance.Type, instance.ID, resolved)
+	resolved["CLAWMANAGER_RUNTIME_TYPE"] = normalizeInstanceRuntimeType(instance.RuntimeType)
+	if normalizeInstanceRuntimeType(instance.RuntimeType) == "shell" {
+		resolved["CLAWMANAGER_DESKTOP_ENABLED"] = "false"
+		delete(resolved, "SUBFOLDER")
+	}
 	resolved = mergeEnvMaps(resolved, overrides)
 
 	return resolved, nil

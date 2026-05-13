@@ -19,6 +19,7 @@ type SystemSettingsHandler struct {
 type UpsertSystemImageSettingRequest struct {
 	ID           int    `json:"id,omitempty"`
 	InstanceType string `json:"instance_type" binding:"required"`
+	RuntimeType  string `json:"runtime_type" binding:"omitempty,oneof=desktop shell"`
 	DisplayName  string `json:"display_name"`
 	Image        string `json:"image" binding:"required"`
 }
@@ -49,6 +50,7 @@ func (h *SystemSettingsHandler) UpsertSystemImageSetting(c *gin.Context) {
 	setting := &models.SystemImageSetting{
 		ID:           req.ID,
 		InstanceType: strings.TrimSpace(req.InstanceType),
+		RuntimeType:  strings.TrimSpace(req.RuntimeType),
 		DisplayName:  strings.TrimSpace(req.DisplayName),
 		Image:        strings.TrimSpace(req.Image),
 	}

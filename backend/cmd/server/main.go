@@ -202,6 +202,7 @@ func main() {
 			instances.POST("/:id/config/revisions/publish", instanceHandler.PublishConfigRevision)
 			instances.POST("/:id/access", instanceHandler.GenerateAccessToken)
 			instances.GET("/:id/access", instanceHandler.AccessInstance)
+			instances.GET("/:id/shell", instanceHandler.StreamShell)
 			instances.POST("/:id/sync", instanceHandler.ForceSync)
 			instances.GET("/:id/openclaw/export", instanceHandler.ExportOpenClaw)
 			instances.POST("/:id/openclaw/import", instanceHandler.ImportOpenClaw)

@@ -774,6 +774,9 @@ const InstanceDetailPage: React.FC = () => {
                 <span className="rounded-full border border-[#ead8cf] bg-[#fffaf7] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#8f776b]">
                   {instance.type}
                 </span>
+                <span className="rounded-full border border-[#dbe4ef] bg-[#f7fbff] px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-[#516070]">
+                  {instance.runtime_type || "desktop"}
+                </span>
                 <span className="text-sm text-[#7a6d66]">
                   {t("instances.instanceIdLabel")}: {instance.id}
                 </span>
@@ -844,8 +847,9 @@ const InstanceDetailPage: React.FC = () => {
                   instanceId={instance.id}
                   instanceName={instance.name}
                   isRunning={effectiveInstanceStatus === "running"}
+                  runtimeType={instance.runtime_type || "desktop"}
                   overlay={
-                    instance.type === "openclaw"
+                    instance.runtime_type !== "shell" && instance.type === "openclaw"
                       ? {
                           gatewayStatus,
                           canControl: canControlGateway,

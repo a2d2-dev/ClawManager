@@ -1,5 +1,7 @@
 import { memo, useState, useEffect, useCallback, useRef } from "react";
+import type { RefObject } from "react";
 import { OpenClawDesktopOverlay } from "./OpenClawDesktopOverlay";
+import { InstanceShellTerminal } from "./InstanceShellTerminal";
 import { useI18n } from "../contexts/I18nContext";
 import { useInstanceDesktopAccess } from "../hooks/useInstanceDesktopAccess";
 
@@ -7,6 +9,7 @@ interface InstanceAccessProps {
   instanceId: number;
   instanceName: string;
   isRunning: boolean;
+  runtimeType?: "desktop" | "shell";
   overlay?: {
     gatewayStatus: string;
     canControl: boolean;
@@ -26,7 +29,7 @@ const DesktopIframeSurface = memo(function DesktopIframeSurface({
   handleFrameError,
 }: {
   frameHeightClass: string;
-  iframeRef: React.RefObject<HTMLIFrameElement | null>;
+  iframeRef: RefObject<HTMLIFrameElement | null>;
   embedUrl: string;
   instanceName: string;
   handleFrameLoad: (frame: HTMLIFrameElement | null) => void;
@@ -47,7 +50,21 @@ const DesktopIframeSurface = memo(function DesktopIframeSurface({
   );
 });
 
-export function InstanceAccess({
+export function InstanceAccess(props: InstanceAccessProps) {
+  if (props.runtimeType === "shell") {
+    return (
+      <InstanceShellTerminal
+        instanceId={props.instanceId}
+        instanceName={props.instanceName}
+        isRunning={props.isRunning}
+      />
+    );
+  }
+
+  return <DesktopInstanceAccess {...props} />;
+}
+
+function DesktopInstanceAccess({
   instanceId,
   instanceName,
   isRunning,

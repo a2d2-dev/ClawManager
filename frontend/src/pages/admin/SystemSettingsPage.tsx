@@ -8,14 +8,48 @@ import {
 } from '../../services/systemSettingsService';
 
 const IMAGE_TYPE_OPTIONS = [
-  { value: 'openclaw', label: 'OpenClaw Desktop', defaultImage: 'ghcr.io/yuan-lab-llm/agentsruntime/openclaw:latest' },
-  { value: 'ubuntu', label: 'Ubuntu Desktop', defaultImage: 'lscr.io/linuxserver/webtop:ubuntu-xfce' },
-  { value: 'webtop', label: 'Webtop Desktop', defaultImage: 'lscr.io/linuxserver/webtop:ubuntu-xfce' },
-  { value: 'hermes', label: 'Hermes Runtime', defaultImage: 'ghcr.io/yuan-lab-llm/agentsruntime/hermes:latest' },
-  { value: 'debian', label: 'Debian Desktop', defaultImage: 'docker.io/clawreef/debian-desktop:12' },
-  { value: 'centos', label: 'CentOS Desktop', defaultImage: 'docker.io/clawreef/centos-desktop:9' },
-  { value: 'custom', label: 'Custom Image', defaultImage: 'registry.example.com/your-custom-image:latest' },
+  { value: 'openclaw', label: 'OpenClaw' },
+  { value: 'ubuntu', label: 'Ubuntu' },
+  { value: 'webtop', label: 'Webtop' },
+  { value: 'hermes', label: 'Hermes' },
+  { value: 'debian', label: 'Debian' },
+  { value: 'centos', label: 'CentOS' },
+  { value: 'custom', label: 'Custom' },
 ];
+
+const RUNTIME_TYPE_OPTIONS: Array<{ value: 'desktop' | 'shell'; labelKey: string }> = [
+  { value: 'desktop', labelKey: 'instances.runtimeTypeDesktop' },
+  { value: 'shell', labelKey: 'instances.runtimeTypeShell' },
+];
+
+const DEFAULT_IMAGES: Record<'desktop' | 'shell', Record<string, string>> = {
+  desktop: {
+    openclaw: 'ghcr.io/yuan-lab-llm/agentsruntime/openclaw:latest',
+    ubuntu: 'lscr.io/linuxserver/webtop:ubuntu-xfce',
+    webtop: 'lscr.io/linuxserver/webtop:ubuntu-xfce',
+    hermes: 'ghcr.io/yuan-lab-llm/agentsruntime/hermes:latest',
+    debian: 'docker.io/clawreef/debian-desktop:12',
+    centos: 'docker.io/clawreef/centos-desktop:9',
+    custom: 'registry.example.com/your-custom-image:latest',
+  },
+  shell: {
+    openclaw: 'ghcr.io/yuan-lab-llm/agentsruntime/openclaw-shell:latest',
+    ubuntu: 'ubuntu:22.04',
+    webtop: 'ubuntu:22.04',
+    hermes: 'ghcr.io/yuan-lab-llm/agentsruntime/hermes-shell:latest',
+    debian: 'debian:12',
+    centos: 'quay.io/centos/centos:stream9',
+    custom: 'registry.example.com/your-custom-shell-image:latest',
+  },
+};
+
+const getDefaultImage = (instanceType: string, runtimeType: 'desktop' | 'shell') =>
+  DEFAULT_IMAGES[runtimeType][instanceType] ?? DEFAULT_IMAGES.desktop.custom;
+
+const getDefaultTitle = (instanceType: string, runtimeType: 'desktop' | 'shell') => {
+  const typeLabel = IMAGE_TYPE_OPTIONS.find((option) => option.value === instanceType)?.label ?? instanceType;
+  return `${typeLabel} ${runtimeType === 'shell' ? 'Shell' : 'Desktop'}`;
+};
 
 interface EditableImageCard extends SystemImageSetting {
   local_id: string;
@@ -30,8 +64,8 @@ const SystemSettingsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [pageError, setPageError] = useState<string | null>(null);
 
-  const usedTypes = useMemo(
-    () => cards.map((card) => card.instance_type).filter(Boolean),
+  const usedPairs = useMemo(
+    () => cards.map((card) => `${card.instance_type}:${card.runtime_type ?? 'desktop'}`).filter(Boolean),
     [cards],
   );
 
@@ -41,11 +75,15 @@ const SystemSettingsPage: React.FC = () => {
         setLoading(true);
         setPageError(null);
         const items = await systemSettingsService.getImageSettings();
-        setCards(items.filter((item) => item.is_enabled !== false).map((item, index) => ({
-          ...item,
-          local_id: `${item.instance_type}-${index}`,
-          error: null,
-        })));
+        setCards(items.filter((item) => item.is_enabled !== false).map((item, index) => {
+          const runtimeType = item.runtime_type ?? 'desktop';
+          return {
+            ...item,
+            runtime_type: runtimeType,
+            local_id: `${item.instance_type}-${runtimeType}-${index}`,
+            error: null,
+          };
+        }));
       } catch (error: any) {
         setPageError(error.response?.data?.error || t('systemSettingsPage.loadFailed'));
       } finally {
@@ -57,14 +95,22 @@ const SystemSettingsPage: React.FC = () => {
   }, []);
 
   const addCard = () => {
-    const nextType = IMAGE_TYPE_OPTIONS.find((option) => !usedTypes.includes(option.value));
+    const nextPair = IMAGE_TYPE_OPTIONS
+      .flatMap((type) => RUNTIME_TYPE_OPTIONS.map((runtime) => ({
+        instanceType: type.value,
+        runtimeType: runtime.value,
+      })))
+      .find((item) => !usedPairs.includes(`${item.instanceType}:${item.runtimeType}`));
+    const instanceType = nextPair?.instanceType ?? 'ubuntu';
+    const runtimeType = nextPair?.runtimeType ?? 'desktop';
     setCards((current) => [
       ...current,
       {
         local_id: `new-${Date.now()}`,
-        instance_type: nextType?.value ?? 'ubuntu',
-        display_name: nextType?.label ?? 'Ubuntu Desktop',
-        image: nextType?.defaultImage ?? '',
+        instance_type: instanceType,
+        runtime_type: runtimeType,
+        display_name: getDefaultTitle(instanceType, runtimeType),
+        image: getDefaultImage(instanceType, runtimeType),
         isNew: true,
         is_enabled: true,
         error: null,
@@ -79,13 +125,14 @@ const SystemSettingsPage: React.FC = () => {
       }
 
       const next = { ...card, ...patch, error: null };
-      if (patch.instance_type) {
-        const option = IMAGE_TYPE_OPTIONS.find((item) => item.value === patch.instance_type);
-        if (option) {
-          next.display_name = option.label;
-          if (card.isNew && (!card.image || card.image === card.display_name)) {
-            next.image = option.defaultImage;
-          }
+      if (patch.instance_type || patch.runtime_type) {
+        const instanceType = patch.instance_type ?? next.instance_type;
+        const runtimeType = patch.runtime_type ?? next.runtime_type ?? 'desktop';
+        const previousDefaultImage = getDefaultImage(card.instance_type, card.runtime_type ?? 'desktop');
+        next.runtime_type = runtimeType;
+        next.display_name = getDefaultTitle(instanceType, runtimeType);
+        if (card.isNew && (!card.image || card.image === card.display_name || card.image === previousDefaultImage)) {
+          next.image = getDefaultImage(instanceType, runtimeType);
         }
       }
       return next;
@@ -98,10 +145,12 @@ const SystemSettingsPage: React.FC = () => {
       return;
     }
 
+    const runtimeType = card.runtime_type ?? 'desktop';
     const normalizedImage = card.image.trim().toLowerCase();
     const duplicate = cards.some((item) =>
       item.local_id !== card.local_id &&
       item.instance_type === card.instance_type &&
+      (item.runtime_type ?? 'desktop') === runtimeType &&
       item.image.trim().toLowerCase() === normalizedImage,
     );
     if (duplicate) {
@@ -115,6 +164,7 @@ const SystemSettingsPage: React.FC = () => {
       const saved = await systemSettingsService.saveImageSetting({
         id: card.id,
         instance_type: card.instance_type,
+        runtime_type: runtimeType,
         display_name: card.display_name,
         image: card.image.trim(),
       });
@@ -185,11 +235,12 @@ const SystemSettingsPage: React.FC = () => {
           ) : (
             <div className="mt-6 grid grid-cols-1 gap-4 xl:grid-cols-2">
               {cards.map((card) => {
-                const defaultImage = IMAGE_TYPE_OPTIONS.find((option) => option.value === card.instance_type)?.defaultImage ?? '-';
+                const runtimeType = card.runtime_type ?? 'desktop';
+                const defaultImage = getDefaultImage(card.instance_type, runtimeType);
 
                 return (
-                  <div key={card.local_id} className="rounded-[26px] border border-[#ead8cf] bg-[rgba(255,248,245,0.84)] p-5 shadow-[0_18px_42px_-34px_rgba(72,44,24,0.42)]">
-                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div key={card.local_id} className="rounded-lg border border-[#ead8cf] bg-[rgba(255,248,245,0.84)] p-5 shadow-[0_18px_42px_-34px_rgba(72,44,24,0.42)]">
+                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                       <div>
                         <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.instanceType')}</label>
                         <select
@@ -200,6 +251,20 @@ const SystemSettingsPage: React.FC = () => {
                           {IMAGE_TYPE_OPTIONS.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">{t('systemSettingsPage.runtimeType')}</label>
+                        <select
+                          value={runtimeType}
+                          onChange={(event) => updateCard(card.local_id, { runtime_type: event.target.value as 'desktop' | 'shell' })}
+                          className="app-input mt-1 block w-full"
+                        >
+                          {RUNTIME_TYPE_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {t(option.labelKey)}
                             </option>
                           ))}
                         </select>

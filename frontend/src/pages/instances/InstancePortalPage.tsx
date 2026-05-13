@@ -6,6 +6,7 @@ import React, {
   useState,
 } from "react";
 import { OpenClawDesktopOverlay } from "../../components/OpenClawDesktopOverlay";
+import { InstanceShellTerminal } from "../../components/InstanceShellTerminal";
 import UserLayout from "../../components/UserLayout";
 import { useInstanceDesktopAccess } from "../../hooks/useInstanceDesktopAccess";
 import { instanceService } from "../../services/instanceService";
@@ -101,6 +102,8 @@ const InstancePortalPage: React.FC = () => {
     () => instances.find((instance) => instance.id === selectedId) ?? null,
     [instances, selectedId],
   );
+  const selectedRuntimeType = selectedInstance?.runtime_type ?? "desktop";
+  const isShellPortal = selectedRuntimeType === "shell";
 
   const {
     embedUrl,
@@ -111,7 +114,8 @@ const InstancePortalPage: React.FC = () => {
     handleFrameError,
   } = useInstanceDesktopAccess({
     instanceId: selectedInstance?.id ?? null,
-    isRunning: selectedInstance?.status === "running" && shouldConnect,
+    isRunning:
+      selectedInstance?.status === "running" && shouldConnect && !isShellPortal,
     retainSessionOnStop: shouldConnect,
     resolveEmbedUrl,
     failedMessage: t("instances.failedToGenerateAccessToken"),
@@ -254,7 +258,9 @@ const InstancePortalPage: React.FC = () => {
 
   const playerStatusText = !selectedInstance
     ? t("instances.portalSelectInstanceSubtitle")
-    : embedUrl
+    : isShellPortal && selectedInstance.status === "running"
+      ? t("instances.shellReady")
+      : embedUrl
       ? t("instances.readyToAccess")
       : selectedInstance.status === "running"
         ? accessLoading && shouldConnect
@@ -352,7 +358,8 @@ const InstancePortalPage: React.FC = () => {
               <div className="flex items-center gap-2">
                 {selectedInstance &&
                   selectedInstance.status === "running" &&
-                  embedUrl && (
+                  embedUrl &&
+                  !isShellPortal && (
                     <button
                       onClick={() => refreshAccess({ forceReload: true })}
                       className="rounded-lg bg-[#243041] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#31415a]"
@@ -360,7 +367,9 @@ const InstancePortalPage: React.FC = () => {
                       {t("instances.refreshToken")}
                     </button>
                   )}
-                {embedUrl && (
+                {(embedUrl ||
+                  (isShellPortal &&
+                    selectedInstance?.status === "running")) && (
                   <button
                     type="button"
                     onClick={toggleFullscreen}
@@ -401,7 +410,16 @@ const InstancePortalPage: React.FC = () => {
             </div>
 
             <div className="min-h-0 flex-1">
-              {embedUrl ? (
+              {selectedInstance &&
+              isShellPortal &&
+              selectedInstance.status === "running" ? (
+                <InstanceShellTerminal
+                  instanceId={selectedInstance.id}
+                  instanceName={selectedInstance.name}
+                  isRunning={selectedInstance.status === "running"}
+                  className="h-full min-h-0 rounded-none border-0 shadow-none"
+                />
+              ) : embedUrl ? (
                 <div className="relative h-full">
                   {selectedInstance?.type === "openclaw" && (
                     <OpenClawDesktopOverlay
@@ -428,7 +446,9 @@ const InstancePortalPage: React.FC = () => {
                     onError={handleFrameError}
                   />
                 </div>
-              ) : selectedInstance && selectedInstance.status === "running" ? (
+              ) : selectedInstance &&
+                selectedInstance.status === "running" &&
+                !isShellPortal ? (
                 <div className="relative flex h-full items-center justify-center bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.18),transparent_26%),linear-gradient(180deg,#111827_0%,#0f172a_100%)] px-8 text-center">
                   {selectedInstance.type === "openclaw" && (
                     <OpenClawDesktopOverlay

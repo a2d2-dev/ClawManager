@@ -129,20 +129,45 @@ func TestSystemImageSettingServiceDeleteByIDCreatesDisabledFallback(t *testing.T
 		t.Fatalf("expected fallback row to be disabled")
 	}
 
-	image, ok := service.GetRuntimeImage("openclaw")
-	if ok || image != "" {
-		t.Fatalf("expected runtime image lookup to be disabled after fallback, got %q %v", image, ok)
+	selection, ok := service.GetRuntimeImage("openclaw")
+	if ok || selection.Image != "" {
+		t.Fatalf("expected runtime image lookup to be disabled after fallback, got %q %v", selection.Image, ok)
 	}
 }
 
 func TestSystemImageSettingServiceGetRuntimeImageFallsBackToDefaultWhenNoRowsExist(t *testing.T) {
 	service := NewSystemImageSettingService(&stubSystemImageSettingRepository{})
 
-	image, ok := service.GetRuntimeImage("openclaw")
+	selection, ok := service.GetRuntimeImage("openclaw")
 	if !ok {
 		t.Fatalf("expected default openclaw runtime image to be available")
 	}
-	if image != defaultSystemImageSettings["openclaw"] {
-		t.Fatalf("expected default openclaw image %q, got %q", defaultSystemImageSettings["openclaw"], image)
+	if selection.Image != defaultSystemImageSettings["openclaw"] {
+		t.Fatalf("expected default openclaw image %q, got %q", defaultSystemImageSettings["openclaw"], selection.Image)
+	}
+	if selection.RuntimeType != "desktop" {
+		t.Fatalf("expected default openclaw runtime type desktop, got %q", selection.RuntimeType)
+	}
+}
+
+func TestSystemImageSettingServiceGetRuntimeImageForImageUsesCardRuntimeType(t *testing.T) {
+	repo := &stubSystemImageSettingRepository{
+		items: []models.SystemImageSetting{
+			{ID: 1, InstanceType: "openclaw", RuntimeType: "desktop", DisplayName: "OpenClaw Desktop", Image: "registry/openclaw-desktop:latest", IsEnabled: true},
+			{ID: 2, InstanceType: "openclaw", RuntimeType: "shell", DisplayName: "OpenClaw Shell", Image: "registry/openclaw-shell:latest", IsEnabled: true},
+		},
+		nextID: 2,
+	}
+
+	service := NewSystemImageSettingService(repo)
+	selection, ok := service.GetRuntimeImageForImage("openclaw", "registry/openclaw-shell:latest")
+	if !ok {
+		t.Fatalf("expected selected shell runtime image to resolve")
+	}
+	if selection.RuntimeType != "shell" {
+		t.Fatalf("expected runtime type shell, got %q", selection.RuntimeType)
+	}
+	if selection.Image != "registry/openclaw-shell:latest" {
+		t.Fatalf("expected shell image to resolve, got %q", selection.Image)
 	}
 }

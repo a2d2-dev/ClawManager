@@ -11,6 +11,7 @@ type Instance struct {
 	Name                     string     `db:"name" json:"name"`
 	Description              *string    `db:"description" json:"description,omitempty"`
 	Type                     string     `db:"type" json:"type"`
+	RuntimeType              string     `db:"runtime_type" json:"runtime_type"`
 	Status                   string     `db:"status" json:"status"`
 	CPUCores                 float64    `db:"cpu_cores" json:"cpu_cores"`
 	MemoryGB                 int        `db:"memory_gb" json:"memory_gb"`

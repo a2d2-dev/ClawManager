@@ -46,6 +46,7 @@ type PodConfig struct {
 	InstanceName       string
 	UserID             int
 	Type               string
+	RuntimeType        string
 	CPUCores           float64
 	MemoryGB           int
 	GPUEnabled         bool
@@ -69,6 +70,7 @@ func (s *PodService) CreatePod(ctx context.Context, config PodConfig) (*corev1.P
 	podName := s.client.GetPodName(config.InstanceID, config.InstanceName)
 	namespace := s.client.GetNamespace(config.UserID)
 	pvcName := s.client.GetPVCName(config.InstanceID)
+	runtimeType := normalizePodRuntimeType(config.RuntimeType)
 
 	// Build resource requirements
 	resources := corev1.ResourceRequirements{
@@ -117,6 +119,7 @@ func (s *PodService) CreatePod(ctx context.Context, config PodConfig) (*corev1.P
 				"instance-name": config.InstanceName,
 				"user-id":       fmt.Sprintf("%d", config.UserID),
 				"instance-type": config.Type,
+				"runtime-type":  runtimeType,
 				"managed-by":    "clawreef",
 			},
 		},
@@ -196,6 +199,13 @@ func (s *PodService) CreatePod(ctx context.Context, config PodConfig) (*corev1.P
 				},
 			},
 		},
+	}
+
+	if runtimeType == "shell" {
+		pod.Spec.Containers[0].Ports = nil
+		pod.Spec.Containers[0].StartupProbe = nil
+		pod.Spec.Containers[0].ReadinessProbe = nil
+		pod.Spec.Containers[0].LivenessProbe = nil
 	}
 
 	for key, value := range config.ExtraEnv {
@@ -283,6 +293,13 @@ func buildContainerSecurityContext(mode PodSecurityMode) *corev1.SecurityContext
 	default:
 		return nil
 	}
+}
+
+func normalizePodRuntimeType(runtimeType string) string {
+	if runtimeType == "shell" {
+		return "shell"
+	}
+	return "desktop"
 }
 
 func intstrFromInt32(port int32) intstr.IntOrString {

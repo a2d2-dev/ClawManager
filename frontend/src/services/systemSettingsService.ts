@@ -3,6 +3,7 @@ import api from './api';
 export interface SystemImageSetting {
   id?: number;
   instance_type: string;
+  runtime_type?: "desktop" | "shell";
   display_name: string;
   image: string;
   is_enabled?: boolean;

@@ -76,3 +76,44 @@ func TestCreatePodAppliesSecurityModes(t *testing.T) {
 		t.Fatalf("expected data and shm volumes, got %d", len(pod.Spec.Volumes))
 	}
 }
+
+func TestCreatePodShellRuntimeSkipsDesktopNetworkProbes(t *testing.T) {
+	previousClient := globalClient
+	t.Cleanup(func() {
+		globalClient = previousClient
+	})
+
+	globalClient = &Client{
+		Clientset:    fake.NewSimpleClientset(),
+		Namespace:    "clawreef",
+		StorageClass: "standard",
+	}
+
+	service := NewPodService()
+	pod, err := service.CreatePod(context.Background(), PodConfig{
+		InstanceID:    43,
+		InstanceName:  "shell-test",
+		UserID:        7,
+		Type:          "openclaw",
+		RuntimeType:   "shell",
+		CPUCores:      1,
+		MemoryGB:      2,
+		Image:         "openclaw:test",
+		MountPath:     "/config",
+		ContainerPort: 3001,
+	})
+	if err != nil {
+		t.Fatalf("CreatePod returned error: %v", err)
+	}
+
+	container := pod.Spec.Containers[0]
+	if got := pod.Labels["runtime-type"]; got != "shell" {
+		t.Fatalf("expected runtime-type shell label, got %q", got)
+	}
+	if len(container.Ports) != 0 {
+		t.Fatalf("expected shell runtime to skip desktop ports, got %d", len(container.Ports))
+	}
+	if container.StartupProbe != nil || container.ReadinessProbe != nil || container.LivenessProbe != nil {
+		t.Fatalf("expected shell runtime to skip desktop TCP probes")
+	}
+}

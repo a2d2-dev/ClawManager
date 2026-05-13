@@ -44,7 +44,6 @@ const BYTES_PER_GIB = 1024 * 1024 * 1024;
 const AGENT_PROTOCOL_VERSION = "v1";
 const CUSTOM_RESOURCE_PRESET = "custom";
 const SKILLS_PER_PAGE = 6;
-
 const supportsRuntimeInjection = (type: string) =>
   type === "openclaw" || type === "hermes";
 
@@ -374,7 +373,7 @@ const getPresetDescription = (
 const getRuntimeImageOptionKey = (item: SystemImageSetting): string =>
   item.id != null
     ? `runtime-image:${item.id}`
-    : `runtime-image:${item.instance_type}:${item.image}`;
+    : `runtime-image:${item.instance_type}:${item.runtime_type ?? "desktop"}:${item.image}`;
 
 const CreateInstancePage: React.FC = () => {
   const { user } = useAuth();
@@ -454,6 +453,7 @@ const CreateInstancePage: React.FC = () => {
     runtimeImageOptions.find(
       (item) => getRuntimeImageOptionKey(item) === selectedRuntimeImageKey,
     ) ?? runtimeImageOptions[0] ?? null;
+  const selectedRuntimeType = selectedRuntimeImage?.runtime_type ?? "desktop";
 
   const getCreateErrorMessage = (rawError?: string) => {
     if (rawError === "instance name already exists") {
@@ -730,6 +730,7 @@ const CreateInstancePage: React.FC = () => {
       setError(null);
       const createPayload: CreateInstanceRequest = {
         ...formData,
+        runtime_type: selectedRuntimeType,
         image_registry: selectedRuntimeImage?.image,
         image_tag: selectedRuntimeImage ? undefined : formData.image_tag,
         environment_overrides: overrides,
@@ -1209,9 +1210,22 @@ const CreateInstancePage: React.FC = () => {
                         >
                           <div className="flex items-start justify-between gap-3">
                             <div>
-                              <h4 className="text-sm font-semibold text-gray-900">
-                                {item.display_name}
-                              </h4>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="text-sm font-semibold text-gray-900">
+                                  {item.display_name}
+                                </h4>
+                                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  (item.runtime_type ?? "desktop") === "shell"
+                                    ? "bg-emerald-50 text-emerald-700"
+                                    : "bg-indigo-50 text-indigo-700"
+                                }`}>
+                                  {t(
+                                    (item.runtime_type ?? "desktop") === "shell"
+                                      ? "instances.runtimeTypeShell"
+                                      : "instances.runtimeTypeDesktop",
+                                  )}
+                                </span>
+                              </div>
                               <p className="mt-1 text-xs uppercase tracking-[0.16em] text-[#b46c50]">
                                 {getInstanceTypeLabel(
                                   t,
@@ -2037,6 +2051,18 @@ const CreateInstancePage: React.FC = () => {
                               selectedType.name,
                             )
                           : formData.type}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-sm font-medium text-gray-500">
+                        {t("instances.runtimeType")}
+                      </dt>
+                      <dd className="mt-1 text-sm text-gray-900">
+                        {t(
+                          selectedRuntimeType === "shell"
+                            ? "instances.runtimeTypeShell"
+                            : "instances.runtimeTypeDesktop",
+                        )}
                       </dd>
                     </div>
                     <div>
