@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { InstanceAccess } from "../../components/InstanceAccess";
 import UserLayout from "../../components/UserLayout";
@@ -82,6 +82,25 @@ const parseJsonRecord = (value: unknown): Record<string, unknown> | undefined =>
     return undefined;
   }
 };
+
+const TEAM_TASK_HISTORY_PAGE_SIZE = 20;
+const TEAM_EVENT_HISTORY_PAGE_SIZE = 50;
+
+const mergeByIdDesc = <T extends { id: number }>(...groups: T[][]) => {
+  const merged = new Map<number, T>();
+  for (const group of groups) {
+    for (const item of group) {
+      merged.set(item.id, item);
+    }
+  }
+  return [...merged.values()].sort((a, b) => b.id - a.id);
+};
+
+const oldestID = (items: { id: number }[]) =>
+  items.reduce<number | undefined>(
+    (current, item) => (current === undefined ? item.id : Math.min(current, item.id)),
+    undefined,
+  );
 
 const normalizeEventPayload = (event: TeamEvent) => {
   const payload = event.payload || {};
@@ -267,28 +286,56 @@ const collaborationEventType = (
   payload: Record<string, unknown>,
 ) => payloadText(payload, ["event", "event_type", "type"]) || event.event_type;
 
-const taskKeyFromEvent = (
-  event: TeamEvent,
-  payload: Record<string, unknown>,
-) => {
-  if (event.task_id) {
-    return `clawmanager-task-${event.task_id}`;
-  }
-  const taskId = payloadText(payload, [
+const canonicalTaskKey = (taskId: number | string) => `clawmanager-task-${taskId}`;
+
+const payloadTaskIDs = (payload: Record<string, unknown>) =>
+  [
     "taskId",
     "task_id",
     "currentTaskId",
     "runtimeTaskId",
     "MessageThreadId",
-  ]);
+  ]
+    .map((key) => payloadText(payload, [key]))
+    .filter(Boolean);
+
+const taskCreatorKey = (task?: TeamTask) =>
+  task?.created_by ? `user-${task.created_by}` : "user";
+
+const taskKeyFromEvent = (
+  event: TeamEvent,
+  payload: Record<string, unknown>,
+  taskKeyByEventTaskID: Map<string, string>,
+  taskKeyByMessageID: Map<string, string>,
+) => {
+  if (event.task_id) {
+    return canonicalTaskKey(event.task_id);
+  }
+  const messageId = payloadText(payload, ["messageId", "message_id"]) || event.message_id;
+  if (messageId) {
+    const taskKey = taskKeyByMessageID.get(messageId);
+    if (taskKey) {
+      return taskKey;
+    }
+  }
+  for (const taskId of payloadTaskIDs(payload)) {
+    const taskKey = taskKeyByEventTaskID.get(taskId);
+    if (taskKey) {
+      return taskKey;
+    }
+  }
+  const taskId = payloadTaskIDs(payload)[0];
   if (taskId) {
     return taskId;
   }
   const inReplyTo = payloadText(payload, ["inReplyTo", "in_reply_to"]);
   if (inReplyTo) {
+    const taskKey = taskKeyByMessageID.get(inReplyTo);
+    if (taskKey) {
+      return taskKey;
+    }
     return `reply:${inReplyTo}`;
   }
-  const messageId = payloadText(payload, ["messageId", "message_id"]) || event.message_id;
   if (messageId) {
     return `message:${messageId}`;
   }
@@ -350,6 +397,29 @@ const routeFromItem = (item: CollaborationItem) =>
     value && values.indexOf(value) === index,
   );
 
+const eventActorKey = (
+  event: TeamEvent,
+  payload: Record<string, unknown>,
+  eventType: string,
+  from: string,
+  memberById: Map<number, TeamMember>,
+  task?: TeamTask,
+) => {
+  if ((eventType === "outbound" || eventType === "task_assigned") && task?.created_by) {
+    return taskCreatorKey(task);
+  }
+  if (from && from !== "clawmanager") {
+    return from;
+  }
+  if (from === "clawmanager" && task?.created_by) {
+    return taskCreatorKey(task);
+  }
+  if (event.member_id) {
+    return memberById.get(event.member_id)?.member_key || `#${event.member_id}`;
+  }
+  return payloadText(payload, ["memberId", "member_id", "from", "to"]) || "system";
+};
+
 const inferGroupStatus = (items: CollaborationItem[], task?: TeamTask) => {
   if (task?.status) {
     return task.status;
@@ -395,38 +465,40 @@ const buildCollaborationGroups = (
   memberById: Map<number, TeamMember>,
 ) => {
   const taskByID = new Map(tasks.map((task) => [task.id, task]));
-  const taskByMessageID = new Map(
-    tasks
-      .filter((task) => task.message_id)
-      .map((task) => [task.message_id, task]),
-  );
-  const messageTaskKeys = new Map<string, string>();
+  const taskByKey = new Map<string, TeamTask>();
+  const taskKeyByEventTaskID = new Map<string, string>();
+  const taskKeyByMessageID = new Map<string, string>();
+
   for (const task of tasks) {
+    const taskKey = canonicalTaskKey(task.id);
+    taskByKey.set(taskKey, task);
+    taskKeyByEventTaskID.set(taskKey, taskKey);
+    taskKeyByEventTaskID.set(String(task.id), taskKey);
+    taskKeyByEventTaskID.set(`team-${task.team_id}-task-${task.id}`, taskKey);
     if (task.message_id) {
-      messageTaskKeys.set(task.message_id, `clawmanager-task-${task.id}`);
+      taskKeyByMessageID.set(task.message_id, taskKey);
     }
   }
+
   for (const event of events) {
     const payload = normalizeEventPayload(event);
-    const taskKey = event.task_id
-      ? `clawmanager-task-${event.task_id}`
-      : payloadText(payload, [
-          "taskId",
-          "task_id",
-          "currentTaskId",
-          "runtimeTaskId",
-          "MessageThreadId",
-        ]);
-    if (!taskKey) {
+    const messageID = payloadText(payload, ["messageId", "message_id"]) || event.message_id;
+    const canonicalKey =
+      (event.task_id ? canonicalTaskKey(event.task_id) : "") ||
+      (messageID && taskKeyByMessageID.get(messageID)) ||
+      "";
+    if (!canonicalKey) {
       continue;
     }
-    const messageID = payloadText(payload, ["messageId", "message_id"]) || event.message_id;
+    for (const taskID of payloadTaskIDs(payload)) {
+      taskKeyByEventTaskID.set(taskID, canonicalKey);
+    }
     const inReplyTo = payloadText(payload, ["inReplyTo", "in_reply_to"]);
     if (messageID) {
-      messageTaskKeys.set(messageID, taskKey);
+      taskKeyByMessageID.set(messageID, canonicalKey);
     }
     if (inReplyTo) {
-      messageTaskKeys.set(inReplyTo, taskKey);
+      taskKeyByMessageID.set(inReplyTo, canonicalKey);
     }
   }
   const groups = new Map<string, CollaborationGroup>();
@@ -434,24 +506,18 @@ const buildCollaborationGroups = (
   for (const event of events) {
     const payload = normalizeEventPayload(event);
     const eventType = collaborationEventType(event, payload);
-    const actor =
-      event.member_id
-        ? memberById.get(event.member_id)?.member_key || `#${event.member_id}`
-        : payloadText(payload, ["memberId", "member_id", "from", "to"]) || "system";
     const from = payloadText(payload, ["from"]);
     const to = payloadText(payload, ["to", "recipient", "memberId"]);
-    let taskKey = taskKeyFromEvent(event, payload);
-    const messageID = payloadText(payload, ["messageId", "message_id"]) || event.message_id;
-    const inReplyTo = payloadText(payload, ["inReplyTo", "in_reply_to"]);
-    const mappedTaskKey =
-      (messageID && messageTaskKeys.get(messageID)) ||
-      (inReplyTo && messageTaskKeys.get(inReplyTo));
-    if (mappedTaskKey && (taskKey.startsWith("message:") || taskKey.startsWith("reply:"))) {
-      taskKey = mappedTaskKey;
-    }
+    const taskKey = taskKeyFromEvent(
+      event,
+      payload,
+      taskKeyByEventTaskID,
+      taskKeyByMessageID,
+    );
     const existingTask =
-      (event.task_id ? taskByID.get(event.task_id) : undefined) ||
-      (messageID ? taskByMessageID.get(messageID) : undefined);
+      taskByKey.get(taskKey) ||
+      (event.task_id ? taskByID.get(event.task_id) : undefined);
+    const actor = eventActorKey(event, payload, eventType, from, memberById, existingTask);
     const item: CollaborationItem = {
       event,
       payload,
@@ -492,7 +558,7 @@ const buildCollaborationGroups = (
   }
 
   for (const task of tasks) {
-    const key = `clawmanager-task-${task.id}`;
+    const key = canonicalTaskKey(task.id);
     if (!groups.has(key)) {
       const target = memberById.get(task.target_member_id)?.member_key || `#${task.target_member_id}`;
       groups.set(key, {
@@ -523,6 +589,14 @@ const TeamDetailPage: React.FC = () => {
   const { user } = useAuth();
   const teamId = id ? Number(id) : null;
   const [details, setDetails] = useState<TeamDetails | null>(null);
+  const [loadedTasks, setLoadedTasks] = useState<TeamTask[]>([]);
+  const [loadedEvents, setLoadedEvents] = useState<TeamEvent[]>([]);
+  const [hasMoreTasks, setHasMoreTasks] = useState(false);
+  const [hasMoreEvents, setHasMoreEvents] = useState(false);
+  const taskHistoryExhausted = useRef(false);
+  const eventHistoryExhausted = useRef(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -540,6 +614,16 @@ const TeamDetailPage: React.FC = () => {
     null,
   );
 
+  useEffect(() => {
+    setLoadedTasks([]);
+    setLoadedEvents([]);
+    setHasMoreTasks(false);
+    setHasMoreEvents(false);
+    taskHistoryExhausted.current = false;
+    eventHistoryExhausted.current = false;
+    setHistoryError(null);
+  }, [teamId]);
+
   const loadTeam = useCallback(
     async (options?: { background?: boolean }) => {
       if (!teamId || Number.isNaN(teamId)) {
@@ -555,6 +639,18 @@ const TeamDetailPage: React.FC = () => {
         }
         const data = await teamService.getTeam(teamId);
         setDetails(data);
+        setLoadedTasks((current) => mergeByIdDesc(data.tasks || [], current));
+        setLoadedEvents((current) => mergeByIdDesc(data.events || [], current));
+        setHasMoreTasks((current) =>
+          taskHistoryExhausted.current
+            ? false
+            : current || (data.tasks?.length || 0) >= TEAM_TASK_HISTORY_PAGE_SIZE,
+        );
+        setHasMoreEvents((current) =>
+          eventHistoryExhausted.current
+            ? false
+            : current || (data.events?.length || 0) >= TEAM_EVENT_HISTORY_PAGE_SIZE,
+        );
         setError(null);
         setTargetMember((current) => current || "");
         setDesktopMemberId((current) =>
@@ -592,8 +688,8 @@ const TeamDetailPage: React.FC = () => {
   const leader = details?.leader || details?.members.find((member) => member.role === "leader");
   const selectedDesktopMember =
     details?.members.find((member) => member.id === desktopMemberId) || leader;
-  const tasks = details?.tasks || [];
-  const events = details?.events || [];
+  const tasks = loadedTasks.length > 0 ? loadedTasks : details?.tasks || [];
+  const events = loadedEvents.length > 0 ? loadedEvents : details?.events || [];
   const selectedMemberInstanceResolved =
     selectedMemberInstance?.id === selectedDesktopMember?.instance_id;
   const selectedAccessRuntimeType = selectedMemberInstanceResolved && selectedMemberInstance
@@ -699,6 +795,38 @@ const TeamDetailPage: React.FC = () => {
       setDispatchError(err.response?.data?.error || "派发任务失败");
     } finally {
       setDispatching(false);
+    }
+  };
+
+  const handleLoadMoreHistory = async () => {
+    if (!teamId || historyLoading || (!hasMoreTasks && !hasMoreEvents)) {
+      return;
+    }
+    try {
+      setHistoryLoading(true);
+      setHistoryError(null);
+      const [taskHistory, eventHistory] = await Promise.all([
+        hasMoreTasks
+          ? teamService.getTeamTasks(teamId, oldestID(tasks), TEAM_TASK_HISTORY_PAGE_SIZE)
+          : Promise.resolve(null),
+        hasMoreEvents
+          ? teamService.getTeamEvents(teamId, oldestID(events), TEAM_EVENT_HISTORY_PAGE_SIZE)
+          : Promise.resolve(null),
+      ]);
+      if (taskHistory) {
+        setLoadedTasks((current) => mergeByIdDesc(current, taskHistory.tasks || []));
+        setHasMoreTasks(taskHistory.has_more);
+        taskHistoryExhausted.current = !taskHistory.has_more;
+      }
+      if (eventHistory) {
+        setLoadedEvents((current) => mergeByIdDesc(current, eventHistory.events || []));
+        setHasMoreEvents(eventHistory.has_more);
+        eventHistoryExhausted.current = !eventHistory.has_more;
+      }
+    } catch (err: any) {
+      setHistoryError(err.response?.data?.error || "加载历史消息失败");
+    } finally {
+      setHistoryLoading(false);
     }
   };
 
@@ -842,8 +970,12 @@ const TeamDetailPage: React.FC = () => {
             taskPrompt={taskPrompt}
             dispatching={dispatching}
             dispatchError={dispatchError}
+            historyLoading={historyLoading}
+            historyError={historyError}
+            hasMoreHistory={hasMoreTasks || hasMoreEvents}
             onTaskPromptChange={setTaskPrompt}
             onDispatch={handleDispatch}
+            onLoadMoreHistory={handleLoadMoreHistory}
           />
         </div>
 
@@ -1088,8 +1220,12 @@ function CollaborationPanel({
   taskPrompt,
   dispatching,
   dispatchError,
+  historyLoading,
+  historyError,
+  hasMoreHistory,
   onTaskPromptChange,
   onDispatch,
+  onLoadMoreHistory,
 }: {
   team: TeamDetails["team"];
   events: TeamEvent[];
@@ -1102,8 +1238,12 @@ function CollaborationPanel({
   taskPrompt: string;
   dispatching: boolean;
   dispatchError: string | null;
+  historyLoading: boolean;
+  historyError: string | null;
+  hasMoreHistory: boolean;
   onTaskPromptChange: (value: string) => void;
   onDispatch: (event: React.FormEvent) => void;
+  onLoadMoreHistory: () => void;
 }) {
   const groups = buildCollaborationGroups(events, tasks, memberById);
   const messages = buildTeamChatMessages(
@@ -1134,11 +1274,41 @@ function CollaborationPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto bg-[#f5f5f5]">
+      <div
+        className="min-h-0 flex-1 overflow-auto bg-[#f5f5f5]"
+        onScroll={(event) => {
+          if (event.currentTarget.scrollTop <= 24 && hasMoreHistory && !historyLoading) {
+            void onLoadMoreHistory();
+          }
+        }}
+      >
         {messages.length === 0 ? (
           <div className="p-6 text-center text-xs text-gray-500">暂无群聊消息。</div>
         ) : (
           <div className="space-y-5 px-4 py-5">
+            {(hasMoreHistory || historyLoading || historyError) && (
+              <div className="space-y-2 text-center">
+                {hasMoreHistory && (
+                  <button
+                    type="button"
+                    disabled={historyLoading}
+                    onClick={() => void onLoadMoreHistory()}
+                    className="inline-flex items-center gap-2 rounded-full border border-[#dddddd] bg-white px-4 py-2 text-xs font-medium text-gray-500 shadow-sm transition hover:border-gray-300 hover:text-gray-700 disabled:cursor-wait disabled:opacity-70"
+                  >
+                    <span className="text-base leading-none">↑</span>
+                    <span>{historyLoading ? "加载历史消息中..." : "向上滑动或点击查看更多历史消息"}</span>
+                  </button>
+                )}
+                {!hasMoreHistory && historyLoading && (
+                  <span className="inline-flex rounded-full border border-[#dddddd] bg-white px-4 py-2 text-xs text-gray-500 shadow-sm">
+                    加载历史消息中...
+                  </span>
+                )}
+                {historyError && (
+                  <div className="text-xs text-red-600">{historyError}</div>
+                )}
+              </div>
+            )}
             <TimeDivider value={messages[0]?.time} />
             {messages.map((message) =>
               message.kind === "system" ? (
@@ -1200,6 +1370,9 @@ type TeamChatMessage = {
   content: string;
   time: number;
   tone?: "normal" | "leader" | "assignment" | "feedback" | "error";
+  dedupeKey?: string;
+  threadKey?: string;
+  sortPhase?: number;
 };
 
 function buildTeamChatMessages(
@@ -1219,15 +1392,27 @@ function buildTeamChatMessages(
         memberById.get(group.task.target_member_id)?.member_key ||
         `#${group.task.target_member_id}`;
       const targetLabel = displayMemberName(target, memberByKey, leaderMemberId);
+      const creatorKey = taskCreatorKey(group.task);
       const prompt = taskPromptText(group.task) || group.title;
+      const assignmentSenderKey =
+        creatorKey === currentUserKey || creatorKey === "user"
+          ? currentUserKey
+          : creatorKey;
+      const assignmentSender =
+        assignmentSenderKey === currentUserKey
+          ? currentUserLabel
+          : displayMemberName(creatorKey, memberByKey, leaderMemberId);
       messages.push({
         id: `task-${group.task.id}`,
         kind: "member",
-        sender: currentUserLabel,
-        senderKey: currentUserKey,
+        sender: assignmentSender,
+        senderKey: assignmentSenderKey,
         content: `@${targetLabel} ${prompt}\n任务：${group.task.message_id || group.label}`,
         time: new Date(group.task.created_at).getTime(),
         tone: "assignment",
+        dedupeKey: `assignment:${group.task.message_id || group.task.id}`,
+        threadKey: group.key,
+        sortPhase: 0,
       });
       const resultSummary =
         payloadText(group.task.result, ["summary", "result", "message", "text"]) ||
@@ -1241,6 +1426,9 @@ function buildTeamChatMessages(
           content: `任务结果反馈：\n${resultSummary}`,
           time: new Date(group.task.finished_at || group.task.updated_at).getTime(),
           tone: "feedback",
+          dedupeKey: `feedback:${group.task.message_id || group.task.id}:${normalizeChatDedupeContent(resultSummary)}`,
+          threadKey: group.key,
+          sortPhase: 2,
         });
       }
       if (group.task.error_message && group.items.length === 0) {
@@ -1252,6 +1440,9 @@ function buildTeamChatMessages(
           content: `失败：${group.task.error_message}`,
           time: new Date(group.task.updated_at).getTime(),
           tone: "error",
+          dedupeKey: `error:${group.task.message_id || group.task.id}:${normalizeChatDedupeContent(group.task.error_message)}`,
+          threadKey: group.key,
+          sortPhase: 2,
         });
       }
     }
@@ -1268,7 +1459,18 @@ function buildTeamChatMessages(
   }
   return messages
     .filter((message) => Number.isFinite(message.time))
-    .sort((a, b) => a.time - b.time || a.id.localeCompare(b.id));
+    .sort(compareTeamChatMessages)
+    .filter(dedupeTeamChatMessage());
+}
+
+function compareTeamChatMessages(a: TeamChatMessage, b: TeamChatMessage) {
+  if (a.threadKey && a.threadKey === b.threadKey) {
+    const phaseDiff = (a.sortPhase ?? 1) - (b.sortPhase ?? 1);
+    if (phaseDiff !== 0) {
+      return phaseDiff;
+    }
+  }
+  return a.time - b.time || a.id.localeCompare(b.id);
 }
 
 function itemMessageID(item: CollaborationItem) {
@@ -1314,14 +1516,14 @@ function chatMessageFromItem(
     isAssignmentEvent && !hasContent
       ? assignmentEventFallback(item, senderLabel, targetLabel, isFeedbackEvent)
       : chatFallbackText(item, progress, status);
+  const content = item.content || fallbackContent;
+  const isTerminalFeedback = isTerminalFeedbackItem(item, content, isFeedbackEvent);
   return {
     id: `event-${item.event.id}`,
     kind: isSystem ? "system" : "member",
     sender: isSystem ? "系统" : senderLabel,
     senderKey,
-    content:
-      item.content ||
-      fallbackContent,
+    content,
     time: item.timeMs,
     tone:
       isAssignmentEvent && hasContent
@@ -1335,7 +1537,93 @@ function chatMessageFromItem(
           : senderKey === leaderMemberId || senderKey === "ClawManager"
             ? "leader"
             : "normal",
+    dedupeKey: chatItemDedupeKey(item, senderKey, content, isAssignmentEvent, isFeedbackEvent),
+    threadKey: item.taskKey,
+    sortPhase: chatItemSortPhase(item, isAssignmentEvent, isTerminalFeedback),
   };
+}
+
+function chatItemSortPhase(
+  item: CollaborationItem,
+  isAssignmentEvent: boolean,
+  isTerminalFeedback: boolean,
+) {
+  if (isAssignmentEvent && !isTerminalFeedback) {
+    return 0;
+  }
+  if (
+    isTerminalFeedback ||
+    item.eventType === "task_stale" ||
+    item.eventType === "task_failed" ||
+    item.eventType === "message_failed"
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function isTerminalFeedbackItem(
+  item: CollaborationItem,
+  content: string,
+  isFeedbackEvent: boolean,
+) {
+  if (
+    item.eventType === "task_completed" ||
+    item.eventType === "completion" ||
+    item.eventType === "task_failed" ||
+    item.eventType === "message_failed"
+  ) {
+    return true;
+  }
+  return isFeedbackEvent && finalFeedbackContentPattern.test(content);
+}
+
+const finalFeedbackContentPattern =
+  /\bDONE\b|team_complete_task|任务核心结果|完整详细产出|结果已反馈|已完成|执行完成|完成任务/;
+
+function dedupeTeamChatMessage() {
+  const seen = new Set<string>();
+  return (message: TeamChatMessage) => {
+    if (!message.dedupeKey) {
+      return true;
+    }
+    if (seen.has(message.dedupeKey)) {
+      return false;
+    }
+    seen.add(message.dedupeKey);
+    return true;
+  };
+}
+
+function chatItemDedupeKey(
+  item: CollaborationItem,
+  senderKey: string,
+  content: string,
+  isAssignmentEvent: boolean,
+  isFeedbackEvent: boolean,
+) {
+  const messageId =
+    payloadTextDeep(item.payload, ["messageId", "message_id", "inReplyTo", "in_reply_to"]) ||
+    item.event.message_id ||
+    "";
+  const taskId =
+    payloadTextDeep(item.payload, ["taskId", "task_id", "runtimeTaskId"]) ||
+    (item.event.task_id ? canonicalTaskKey(item.event.task_id) : item.taskKey);
+  const contentKey = normalizeChatDedupeContent(content);
+  if (isAssignmentEvent) {
+    return `assignment:${messageId || taskId}:${senderKey}:${item.to || ""}:${contentKey}`;
+  }
+  if (isFeedbackEvent) {
+    return `feedback:${messageId || taskId}:${senderKey}:${item.to || ""}:${contentKey}`;
+  }
+  if (item.eventType === "task_completed" || item.eventType === "completion" || item.eventType === "reply") {
+    return `feedback:${messageId || taskId}:${senderKey}:${item.to || ""}:${contentKey}`;
+  }
+  return "";
+}
+
+function normalizeChatDedupeContent(content: string) {
+  return content.trim().replace(/\s+/g, " ").slice(0, 240);
 }
 
 function assignmentEventFallback(
@@ -1425,6 +1713,12 @@ function displayMemberName(
   }
   if (memberKey === "ClawManager") {
     return "ClawManager（system）";
+  }
+  if (memberKey === "user") {
+    return "User";
+  }
+  if (memberKey.startsWith("user-")) {
+    return `User #${memberKey.slice("user-".length)}`;
   }
   return memberKey;
 }

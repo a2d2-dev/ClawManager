@@ -31,11 +31,13 @@ type TeamRepository interface {
 	GetTaskByID(id int) (*models.TeamTask, error)
 	GetTaskByMessageID(teamID int, messageID string) (*models.TeamTask, error)
 	ListTasksByTeamID(teamID int, limit int) ([]models.TeamTask, error)
+	ListTasksBeforeID(teamID, beforeID, limit int) ([]models.TeamTask, error)
 	ListStaleCandidateTasks(cutoff time.Time, limit int) ([]models.TeamTask, error)
 
 	CreateEvent(event *models.TeamEvent) error
 	EventExistsByStreamID(teamID int, streamID string) (bool, error)
 	ListEventsByTeamID(teamID int, limit int) ([]models.TeamEvent, error)
+	ListEventsBeforeID(teamID, beforeID, limit int) ([]models.TeamEvent, error)
 }
 
 type teamRepository struct {
@@ -235,6 +237,21 @@ func (r *teamRepository) ListTasksByTeamID(teamID int, limit int) ([]models.Team
 	return tasks, nil
 }
 
+func (r *teamRepository) ListTasksBeforeID(teamID, beforeID, limit int) ([]models.TeamTask, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	cond := db.Cond{"team_id": teamID}
+	if beforeID > 0 {
+		cond["id <"] = beforeID
+	}
+	var tasks []models.TeamTask
+	if err := r.sess.Collection("team_tasks").Find(cond).OrderBy("-created_at", "-id").Limit(limit).All(&tasks); err != nil {
+		return nil, fmt.Errorf("failed to list team task history: %w", err)
+	}
+	return tasks, nil
+}
+
 func (r *teamRepository) ListStaleCandidateTasks(cutoff time.Time, limit int) ([]models.TeamTask, error) {
 	if limit <= 0 {
 		limit = 100
@@ -285,6 +302,21 @@ func (r *teamRepository) ListEventsByTeamID(teamID int, limit int) ([]models.Tea
 	var events []models.TeamEvent
 	if err := r.sess.Collection("team_events").Find(db.Cond{"team_id": teamID}).OrderBy("-created_at", "-id").Limit(limit).All(&events); err != nil {
 		return nil, fmt.Errorf("failed to list team events: %w", err)
+	}
+	return events, nil
+}
+
+func (r *teamRepository) ListEventsBeforeID(teamID, beforeID, limit int) ([]models.TeamEvent, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	cond := db.Cond{"team_id": teamID}
+	if beforeID > 0 {
+		cond["id <"] = beforeID
+	}
+	var events []models.TeamEvent
+	if err := r.sess.Collection("team_events").Find(cond).OrderBy("-created_at", "-id").Limit(limit).All(&events); err != nil {
+		return nil, fmt.Errorf("failed to list team event history: %w", err)
 	}
 	return events, nil
 }

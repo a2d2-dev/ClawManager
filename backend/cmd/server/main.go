@@ -237,7 +237,9 @@ func main() {
 			teams.POST("", teamHandler.CreateTeam)
 			teams.GET("/:id", teamHandler.GetTeam)
 			teams.DELETE("/:id", teamHandler.DeleteTeam)
+			teams.GET("/:id/tasks", teamHandler.ListTasks)
 			teams.POST("/:id/tasks", teamHandler.DispatchTask)
+			teams.GET("/:id/events", teamHandler.ListEvents)
 			teams.DELETE("/:id/members/:memberID", teamHandler.DeleteMember)
 		}
 

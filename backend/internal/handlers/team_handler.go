@@ -71,6 +71,44 @@ func (h *TeamHandler) GetTeam(c *gin.Context) {
 	utils.Success(c, http.StatusOK, "Team retrieved successfully", team)
 }
 
+func (h *TeamHandler) ListTasks(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	tasks, err := h.teamService.ListTeamTasks(
+		userID.(int),
+		teamID,
+		parseOptionalIntQuery(c, "before_id"),
+		parseOptionalIntQuery(c, "limit"),
+	)
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusOK, "Team tasks retrieved successfully", tasks)
+}
+
+func (h *TeamHandler) ListEvents(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	events, err := h.teamService.ListTeamEvents(
+		userID.(int),
+		teamID,
+		parseOptionalIntQuery(c, "before_id"),
+		parseOptionalIntQuery(c, "limit"),
+	)
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusOK, "Team events retrieved successfully", events)
+}
+
 func (h *TeamHandler) DispatchTask(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	teamID, ok := parseTeamID(c)
@@ -125,4 +163,16 @@ func parseTeamID(c *gin.Context) (int, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func parseOptionalIntQuery(c *gin.Context, key string) int {
+	raw := c.Query(key)
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return 0
+	}
+	return value
 }

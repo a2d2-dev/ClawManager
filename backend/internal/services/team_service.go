@@ -45,6 +45,8 @@ type TeamService interface {
 	CreateTeam(userID int, req CreateTeamRequest) (*TeamDetailsPayload, error)
 	ListTeams(userID, offset, limit int) (*TeamListPayload, error)
 	GetTeam(userID, teamID int) (*TeamDetailsPayload, error)
+	ListTeamTasks(userID, teamID, beforeID, limit int) (*TeamTasksHistoryPayload, error)
+	ListTeamEvents(userID, teamID, beforeID, limit int) (*TeamEventsHistoryPayload, error)
 	DispatchTask(userID, teamID int, req DispatchTeamTaskRequest) (*TeamTaskPayload, error)
 	DeleteTeam(userID, teamID int) error
 	DeleteMember(userID, teamID int, memberID string) error
@@ -96,6 +98,18 @@ type TeamDetailsPayload struct {
 	Members        []models.TeamMember `json:"members"`
 	Tasks          []TeamTaskPayload   `json:"tasks,omitempty"`
 	Events         []TeamEventPayload  `json:"events,omitempty"`
+}
+
+type TeamTasksHistoryPayload struct {
+	Tasks        []TeamTaskPayload `json:"tasks"`
+	HasMore      bool              `json:"has_more"`
+	NextBeforeID *int              `json:"next_before_id,omitempty"`
+}
+
+type TeamEventsHistoryPayload struct {
+	Events       []TeamEventPayload `json:"events"`
+	HasMore      bool               `json:"has_more"`
+	NextBeforeID *int               `json:"next_before_id,omitempty"`
 }
 
 type TeamTaskPayload struct {
@@ -517,6 +531,48 @@ func (s *teamService) GetTeam(userID, teamID int) (*TeamDetailsPayload, error) {
 		Members:        members,
 		Tasks:          teamTaskPayloads(tasks),
 		Events:         teamEventPayloads(events),
+	}, nil
+}
+
+func (s *teamService) ListTeamTasks(userID, teamID, beforeID, limit int) (*TeamTasksHistoryPayload, error) {
+	if _, err := s.requireOwnedTeam(userID, teamID); err != nil {
+		return nil, err
+	}
+	limit = normalizeTeamHistoryLimit(limit, 20, 100)
+	tasks, err := s.repo.ListTasksBeforeID(teamID, beforeID, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	hasMore := len(tasks) > limit
+	if hasMore {
+		tasks = tasks[:limit]
+	}
+	payload := teamTaskPayloads(tasks)
+	return &TeamTasksHistoryPayload{
+		Tasks:        payload,
+		HasMore:      hasMore,
+		NextBeforeID: nextTeamTaskBeforeID(payload),
+	}, nil
+}
+
+func (s *teamService) ListTeamEvents(userID, teamID, beforeID, limit int) (*TeamEventsHistoryPayload, error) {
+	if _, err := s.requireOwnedTeam(userID, teamID); err != nil {
+		return nil, err
+	}
+	limit = normalizeTeamHistoryLimit(limit, 50, 200)
+	events, err := s.repo.ListEventsBeforeID(teamID, beforeID, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	hasMore := len(events) > limit
+	if hasMore {
+		events = events[:limit]
+	}
+	payload := teamEventPayloads(events)
+	return &TeamEventsHistoryPayload{
+		Events:       payload,
+		HasMore:      hasMore,
+		NextBeforeID: nextTeamEventBeforeID(payload),
 	}, nil
 }
 
@@ -1272,6 +1328,32 @@ func teamTaskPayloads(tasks []models.TeamTask) []TeamTaskPayload {
 		}
 	}
 	return result
+}
+
+func normalizeTeamHistoryLimit(limit, defaultLimit, maxLimit int) int {
+	if limit <= 0 {
+		return defaultLimit
+	}
+	if limit > maxLimit {
+		return maxLimit
+	}
+	return limit
+}
+
+func nextTeamTaskBeforeID(tasks []TeamTaskPayload) *int {
+	if len(tasks) == 0 {
+		return nil
+	}
+	next := tasks[len(tasks)-1].ID
+	return &next
+}
+
+func nextTeamEventBeforeID(events []TeamEventPayload) *int {
+	if len(events) == 0 {
+		return nil
+	}
+	next := events[len(events)-1].ID
+	return &next
 }
 
 func teamTaskPayload(task models.TeamTask) (*TeamTaskPayload, error) {

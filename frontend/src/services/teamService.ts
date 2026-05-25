@@ -3,8 +3,10 @@ import type {
   CreateTeamRequest,
   DispatchTeamTaskRequest,
   TeamDetails,
+  TeamEventsHistoryResponse,
   TeamListResponse,
   TeamTask,
+  TeamTasksHistoryResponse,
 } from "../types/team";
 
 export const teamService = {
@@ -25,6 +27,28 @@ export const teamService = {
 
   getTeam: async (id: number): Promise<TeamDetails> => {
     const response = await api.get(`/teams/${id}`);
+    return response.data.data;
+  },
+
+  getTeamTasks: async (
+    id: number,
+    beforeId?: number,
+    limit: number = 20,
+  ): Promise<TeamTasksHistoryResponse> => {
+    const response = await api.get(`/teams/${id}/tasks`, {
+      params: { before_id: beforeId, limit },
+    });
+    return response.data.data;
+  },
+
+  getTeamEvents: async (
+    id: number,
+    beforeId?: number,
+    limit: number = 50,
+  ): Promise<TeamEventsHistoryResponse> => {
+    const response = await api.get(`/teams/${id}/events`, {
+      params: { before_id: beforeId, limit },
+    });
     return response.data.data;
   },
 

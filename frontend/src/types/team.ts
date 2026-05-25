@@ -120,6 +120,18 @@ export interface TeamDetails {
   events?: TeamEvent[];
 }
 
+export interface TeamTasksHistoryResponse {
+  tasks: TeamTask[];
+  has_more: boolean;
+  next_before_id?: number;
+}
+
+export interface TeamEventsHistoryResponse {
+  events: TeamEvent[];
+  has_more: boolean;
+  next_before_id?: number;
+}
+
 export interface TeamListResponse {
   teams: Team[];
   total: number;
