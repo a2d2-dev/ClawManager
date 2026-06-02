@@ -91,7 +91,7 @@ const BUILTIN_MEMBER_TEMPLATES: TeamMemberTemplate[] = [
         image: "",
       },
       {
-        memberId: "worker",
+        memberId: "worker-1",
         name: "team-worker",
         role: "developer",
         runtimeType: "openclaw",
@@ -308,7 +308,7 @@ const defaultMember = (
   overrides?: Partial<TeamMemberDraft>,
 ): TeamMemberDraft => ({
   id: newDraftId(),
-  memberId: "worker",
+  memberId: "worker-1",
   name: "",
   role: "developer",
   runtimeType: "openclaw",
@@ -398,6 +398,34 @@ const uniqueMemberId = (raw: string, usedIds: Set<string>, fallbackIndex: number
   return candidate;
 };
 
+const nextWorkerMemberId = (members: TeamMemberDraft[]) => {
+  const usedIds = new Set(
+    members
+      .map((member) => normalizeMemberId(member.memberId))
+      .filter(Boolean),
+  );
+  let maxWorkerIndex = 0;
+
+  usedIds.forEach((memberId) => {
+    if (memberId === "worker") {
+      maxWorkerIndex = Math.max(maxWorkerIndex, 1);
+      return;
+    }
+    const match = memberId.match(/^worker-(\d+)$/);
+    if (match) {
+      maxWorkerIndex = Math.max(maxWorkerIndex, Number(match[1]));
+    }
+  });
+
+  let candidateIndex = maxWorkerIndex + 1;
+  let candidate = `worker-${candidateIndex}`;
+  while (usedIds.has(candidate)) {
+    candidateIndex += 1;
+    candidate = `worker-${candidateIndex}`;
+  }
+  return candidate;
+};
+
 const CreateTeamPage: React.FC = () => {
   const navigate = useNavigate();
   const [name, setName] = useState("");
@@ -421,7 +449,7 @@ const CreateTeamPage: React.FC = () => {
       isLeader: true,
     }),
     defaultMember({
-      memberId: "worker",
+      memberId: "worker-1",
       role: "developer",
     }),
   ]);
@@ -576,11 +604,10 @@ const CreateTeamPage: React.FC = () => {
   };
 
   const addMember = () => {
-    const nextIndex = members.length + 1;
     setMembers((current) => [
       ...current,
       defaultMember({
-        memberId: `worker-${nextIndex}`,
+        memberId: nextWorkerMemberId(current),
         image: selectedImage?.image || "",
       }),
     ]);

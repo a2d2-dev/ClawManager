@@ -2027,7 +2027,7 @@ export const translations: Record<Locale, TranslationTree> = {
       paginationPrev: "Previous",
       paginationNext: "Next",
       skillUploadHint:
-        "Upload `.zip` only. Each top-level directory is imported as one skill.",
+        "Upload `.zip` only. Put SKILL.md at the archive root for one skill, or in each top-level directory for batch import.",
       loadingSkills: "Loading skills...",
       noSkills: "No skills uploaded yet.",
       skillMeta: "{key} · risk {risk} · used by {count} instance(s)",
@@ -3229,7 +3229,8 @@ export const translations: Record<Locale, TranslationTree> = {
       paginationSummary: "每页 {pageSize} 条，本页显示 {from}-{to}",
       paginationPrev: "上一页",
       paginationNext: "下一页",
-      skillUploadHint: "仅支持上传 `.zip`。每个一级目录会被导入为一个技能。",
+      skillUploadHint:
+        "仅支持上传 `.zip`。单个技能可把 SKILL.md 放在压缩包根目录；批量导入时每个一级目录都需要包含 SKILL.md。",
       loadingSkills: "正在加载技能...",
       noSkills: "暂时还没有上传任何技能。",
       skillMeta: "{key} · 风险 {risk} · 已被 {count} 个实例使用",
@@ -4493,7 +4494,7 @@ export const translations: Record<Locale, TranslationTree> = {
       paginationPrev: "前へ",
       paginationNext: "次へ",
       skillUploadHint:
-        "`.zip` のみアップロードできます。トップレベルの各ディレクトリが 1 つのスキルとして取り込まれます。",
+        "`.zip` のみアップロードできます。単一スキルはルートに SKILL.md、複数スキルは各トップレベルディレクトリに SKILL.md を置いてください。",
       loadingSkills: "スキルを読み込み中...",
       noSkills: "まだアップロードされたスキルはありません。",
       skillMeta: "{key} · リスク {risk} · {count} インスタンスで使用中",
@@ -5748,7 +5749,7 @@ export const translations: Record<Locale, TranslationTree> = {
       paginationPrev: "이전 페이지",
       paginationNext: "다음 페이지",
       skillUploadHint:
-        "`.zip`만 업로드할 수 있습니다. 최상위 디렉터리 하나가 스킬 하나로 가져와집니다.",
+        "`.zip`만 업로드할 수 있습니다. 단일 스킬은 루트에 SKILL.md를 두고, 일괄 가져오기는 각 최상위 디렉터리에 SKILL.md를 두세요.",
       loadingSkills: "스킬을 불러오는 중...",
       noSkills: "업로드된 스킬이 아직 없습니다.",
       skillMeta: "{key} · 위험도 {risk} · {count}개 인스턴스에서 사용 중",
@@ -7034,7 +7035,7 @@ export const translations: Record<Locale, TranslationTree> = {
       paginationPrev: "Zurück",
       paginationNext: "Weiter",
       skillUploadHint:
-        "Nur `.zip` hochladen. Jedes Verzeichnis auf oberster Ebene wird als ein Skill importiert.",
+        "Nur `.zip` hochladen. Für einen Skill SKILL.md im Archivstamm ablegen; für Batch-Importe SKILL.md in jedem Verzeichnis oberster Ebene ablegen.",
       loadingSkills: "Skills werden geladen...",
       noSkills: "Noch keine Skills hochgeladen.",
       skillMeta: "{key} · Risiko {risk} · in {count} Instanz(en) verwendet",
