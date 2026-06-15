@@ -54,3 +54,26 @@ func TestRuntimeManifestsSeedLiteDefaultImages(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeManifestsExposeOpenClawGatewayOnPodIP(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", "..", ".."))
+	for _, manifest := range []string{
+		filepath.Join(repoRoot, "deployments", "k8s", "clawmanager.yaml"),
+		filepath.Join(repoRoot, "deployments", "k3s", "clawmanager.yaml"),
+	} {
+		t.Run(manifest, func(t *testing.T) {
+			raw, err := os.ReadFile(manifest)
+			if err != nil {
+				t.Fatalf("read manifest: %v", err)
+			}
+			text := string(raw)
+			want := "/usr/local/bin/openclaw gateway run --allow-unconfigured --auth token --bind lan --force"
+			if !strings.Contains(text, want) {
+				t.Fatalf("manifest %s must expose OpenClaw gateway on the pod network with %q", manifest, want)
+			}
+			if strings.Contains(text, "--auth token --bind auto --force") {
+				t.Fatalf("manifest %s must not use OpenClaw --bind auto because it can bind to loopback inside runtime pods", manifest)
+			}
+		})
+	}
+}

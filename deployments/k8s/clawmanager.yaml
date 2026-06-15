@@ -1376,7 +1376,7 @@ spec:
             - name: RUNTIME_AGENT_PUBLIC_PORT
               value: "19090"
             - name: RUNTIME_GATEWAY_COMMAND
-              value: "/usr/local/bin/openclaw gateway run --allow-unconfigured --auth token --bind auto --force"
+              value: "/usr/local/bin/openclaw gateway run --allow-unconfigured --auth token --bind lan --force"
             - name: OPENCLAW_GATEWAY_TOKEN
               valueFrom:
                 secretKeyRef:
