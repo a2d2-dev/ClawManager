@@ -55,6 +55,7 @@
 
 Recent highlights from the latest product and documentation updates.
 
+- [2026-06-14] Added Lite / Pro runtime modes and rollout support, so Lite instances can run through shared gateway runtime pools while Pro instances keep dedicated desktop deployments for stronger isolation.
 - [2026-05-18] Added the Team workspace MVP introduction and preview, covering one-click Team creation, OpenClaw member orchestration, Redis Team Bus injection, shared storage, member status, task dispatch, and event/result views.
 - [2026-04-29] Added Hermes runtime integration support, including Webtop-based instance provisioning, Agent Control Plane registration, AI Gateway injection, channel and skill bootstrap, and `.hermes` import/export workflows. See the [Hermes Runtime Guide](./docs/hermes-runtime-agent-development.md).
 - [2026-04-08] Added skill management and skill scanning workflows to the platform, via [Merged PR #52](https://github.com/Yuan-lab-LLM/ClawManager/pull/52).
@@ -172,6 +173,18 @@ See the [Resource Management Guide](./docs/resource-management.md) and the [Secu
 ## Product Gallery
 
 The product is designed to feel coherent across administration, workspace access, and AI governance. Instead of treating these as separate tools, ClawManager brings them into one control surface.
+
+### Lite Mode Deployment
+
+Lite mode provisions instances through a shared gateway runtime pool. Each workspace runs as an isolated gateway process inside managed runtime Pods, which keeps startup fast and lowers dedicated CPU, memory, storage, and GPU allocation overhead while preserving workspace access, Share Link / Password access, channel and skill injection, and admin visibility.
+
+![](./docs/main/liteopenclaw.png)
+
+### Pro Mode Deployment
+
+Pro mode provisions a dedicated desktop runtime for each instance, backed by its own Kubernetes Deployment, Service, and PVC. Use it when users need stronger isolation, full desktop resources, runtime events, instance skill management, and the complete desktop management experience.
+
+![](./docs/main/proopenclaw.png)
 
 ### Team Workspace
 

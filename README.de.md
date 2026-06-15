@@ -55,6 +55,7 @@
 
 Wichtige aktuelle Produkt- und Dokumentations-Updates.
 
+- [2026-06-14] Lite-/Pro-Runtime-Modi und Rollout-Support hinzugefuegt: Lite-Instanzen laufen ueber gemeinsame Gateway-Runtime-Pools, waehrend Pro-Instanzen dedizierte Desktop-Deployments fuer staerkere Isolation behalten.
 - [2026-05-18] Team-Workspace-MVP mit Einfuehrung und Vorschau hinzugefuegt, inklusive One-Click-Team-Erstellung, OpenClaw-Member-Orchestrierung, Redis-Team-Bus-Injection, Shared Storage, Member-Status, Task-Dispatch sowie Event- und Ergebnisansichten.
 - [2026-04-29] Hermes-Runtime-Integration hinzugefuegt, inklusive Webtop-basierter Instanzbereitstellung, Agent-Control-Plane-Registrierung, AI-Gateway-Injection, channel- und skill-Bootstrap sowie `.hermes` Import/Export. Siehe [Hermes Runtime Guide](./docs/hermes-runtime-agent-development.md).
 - [2026-04-08] Skill-Verwaltung und Skill-Scanning wurden der Plattform hinzugefuegt. Details siehe [Merged PR #52](https://github.com/Yuan-lab-LLM/ClawManager/pull/52).
@@ -176,6 +177,18 @@ Siehe [Resource Management Guide (English)](./docs/resource-management.md) und [
 ## Produktgalerie
 
 ClawManager ist so gestaltet, dass Administration, Zugriff und AI-Governance nicht wie getrennte Werkzeuge wirken, sondern wie eine zusammenhaengende Produkterfahrung.
+
+### Lite-Mode-Deployment
+
+Lite Mode stellt Instanzen ueber einen gemeinsamen Gateway-Runtime-Pool bereit. Jeder Workspace laeuft als isolierter Gateway-Prozess in verwalteten Runtime-Pods. Das sorgt fuer schnelle Starts und reduziert dedizierte CPU-, Memory-, Storage- und GPU-Allocation, waehrend Workspace-Zugriff, Share Link / Password Access, channel- und skill-Injection sowie Admin-Sichtbarkeit erhalten bleiben.
+
+![](./docs/main/liteopenclaw.png)
+
+### Pro-Mode-Deployment
+
+Pro Mode stellt fuer jede Instanz eine dedizierte Desktop-Runtime bereit, gestuetzt durch ein eigenes Kubernetes Deployment, einen Service und eine PVC. Es eignet sich fuer Nutzer, die staerkere Isolation, volle Desktop-Ressourcen, Runtime Events, Instanz-Skill-Verwaltung und die vollstaendige Desktop-Management-Erfahrung benoetigen.
+
+![](./docs/main/proopenclaw.png)
 
 ### Team Workspace
 
