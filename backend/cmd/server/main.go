@@ -121,7 +121,12 @@ func main() {
 	instanceRuntimeStatusService := services.NewInstanceRuntimeStatusService(instanceRuntimeStatusRepo, instanceAgentRepo, instanceDesiredStateRepo)
 	instanceCommandService := services.NewInstanceCommandService(instanceCommandRepo, instanceRuntimeStatusRepo, instanceDesiredStateRepo)
 	instanceConfigRevisionService := services.NewInstanceConfigRevisionService(instanceConfigRevisionRepo)
-	teamService := services.NewTeamService(teamRepo, instanceService, services.WithTeamRuntimeWorkspaceRoot(cfg.Runtime.WorkspaceRoot))
+	teamService := services.NewTeamService(
+		teamRepo,
+		instanceService,
+		services.WithTeamRuntimeWorkspaceRoot(cfg.Runtime.WorkspaceRoot),
+		services.WithTeamOpenClawConfigService(openClawConfigService),
+	)
 	var platformRedis services.PlatformRedisClient
 	if redisURL := strings.TrimSpace(cfg.Runtime.RedisURL); redisURL != "" {
 		var redisErr error

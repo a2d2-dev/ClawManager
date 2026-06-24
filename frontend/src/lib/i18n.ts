@@ -1878,6 +1878,13 @@ export const translations: Record<Locale, TranslationTree> = {
       desktopStreamSavedRestartRequired:
         "Stream profile saved. Restart the instance for it to take effect.",
       desktopStreamSaveFailed: "Failed to save stream profile.",
+      saveAndRestart: "Save and restart",
+      restartNow: "Restart now",
+      restarting: "Restarting...",
+      restartInProgress:
+        "Restarting the instance. The desktop may disconnect briefly while the new stream settings apply.",
+      restartSubmitted:
+        "Restart requested. The desktop will reconnect when the instance is available again.",
       environmentVariables: "Environment Variables",
       clawManagerBuiltIns: "ClawManager Built-ins",
       hideBuiltIns: "Hide Built-ins",
@@ -3157,6 +3164,12 @@ export const translations: Record<Locale, TranslationTree> = {
       restartRequiredAfterChange: "修改会在实例重启后生效。",
       desktopStreamSavedRestartRequired: "桌面流档位已保存，请重启实例后生效。",
       desktopStreamSaveFailed: "保存桌面流档位失败。",
+      saveAndRestart: "保存并重启",
+      restartNow: "立即重启",
+      restarting: "重启中...",
+      restartInProgress:
+        "正在重启实例，桌面会短暂断开，新桌面流设置会在重连后生效。",
+      restartSubmitted: "已发起重启，实例可用后桌面会自动重新连接。",
       environmentVariables: "环境变量",
       clawManagerBuiltIns: "ClawManager 内置变量",
       hideBuiltIns: "收起内置变量",
@@ -4422,6 +4435,13 @@ export const translations: Record<Locale, TranslationTree> = {
       desktopStreamSavedRestartRequired:
         "Stream profile saved. Restart the instance for it to take effect.",
       desktopStreamSaveFailed: "Failed to save stream profile.",
+      saveAndRestart: "Save and restart",
+      restartNow: "Restart now",
+      restarting: "Restarting...",
+      restartInProgress:
+        "Restarting the instance. The desktop may disconnect briefly while the new stream settings apply.",
+      restartSubmitted:
+        "Restart requested. The desktop will reconnect when the instance is available again.",
       environmentVariables: "環境変数",
       clawManagerBuiltIns: "ClawManager 組み込み変数",
       hideBuiltIns: "組み込み変数を隠す",
@@ -5697,6 +5717,13 @@ export const translations: Record<Locale, TranslationTree> = {
       desktopStreamSavedRestartRequired:
         "Stream profile saved. Restart the instance for it to take effect.",
       desktopStreamSaveFailed: "Failed to save stream profile.",
+      saveAndRestart: "Save and restart",
+      restartNow: "Restart now",
+      restarting: "Restarting...",
+      restartInProgress:
+        "Restarting the instance. The desktop may disconnect briefly while the new stream settings apply.",
+      restartSubmitted:
+        "Restart requested. The desktop will reconnect when the instance is available again.",
       environmentVariables: "환경 변수",
       clawManagerBuiltIns: "ClawManager 내장 변수",
       hideBuiltIns: "내장 변수 숨기기",
@@ -6997,6 +7024,13 @@ export const translations: Record<Locale, TranslationTree> = {
       desktopStreamSavedRestartRequired:
         "Stream profile saved. Restart the instance for it to take effect.",
       desktopStreamSaveFailed: "Failed to save stream profile.",
+      saveAndRestart: "Save and restart",
+      restartNow: "Restart now",
+      restarting: "Restarting...",
+      restartInProgress:
+        "Restarting the instance. The desktop may disconnect briefly while the new stream settings apply.",
+      restartSubmitted:
+        "Restart requested. The desktop will reconnect when the instance is available again.",
       environmentVariables: "Umgebungsvariablen",
       clawManagerBuiltIns: "ClawManager Built-ins",
       hideBuiltIns: "Built-ins ausblenden",

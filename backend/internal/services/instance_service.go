@@ -1371,8 +1371,29 @@ func (s *instanceService) Stop(instanceID int) error {
 
 // Restart restarts an instance
 func (s *instanceService) Restart(instanceID int) error {
+	ctx := context.Background()
+	instance, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return fmt.Errorf("failed to get instance: %w", err)
+	}
+	if instance == nil {
+		return fmt.Errorf("instance not found")
+	}
+
+	_, isV2 := v2RuntimeTypeForInstance(instance)
+	waitForDesktopPods := !isV2 && instanceUsesDesktopRuntime(instance)
+
 	if err := s.Stop(instanceID); err != nil {
 		return fmt.Errorf("failed to stop instance: %w", err)
+	}
+
+	if waitForDesktopPods {
+		if s.deploymentService == nil {
+			return fmt.Errorf("instance deployment service is not configured")
+		}
+		if err := s.deploymentService.WaitForDeploymentPodsDeleted(ctx, instance.UserID, instance.ID); err != nil {
+			return fmt.Errorf("failed waiting for desktop pods to stop: %w", err)
+		}
 	}
 
 	if err := s.Start(instanceID); err != nil {

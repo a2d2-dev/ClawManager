@@ -261,6 +261,7 @@ type OpenClawConfigService interface {
 	ResolveBundleSkillIDs(userID int, plan *OpenClawConfigPlan) ([]int, error)
 
 	CompilePreview(userID int, plan OpenClawConfigPlan) (*OpenClawConfigCompilePreview, error)
+	PlanWithoutTeamMemberLeaderOnlyChannels(userID int, plan *OpenClawConfigPlan) (*OpenClawConfigPlan, error)
 	CreateSnapshotForInstance(userID int, instance *models.Instance, plan *OpenClawConfigPlan) (*models.OpenClawInjectionSnapshot, error)
 	MarkSnapshotActive(snapshot *models.OpenClawInjectionSnapshot) error
 	MarkSnapshotFailed(snapshot *models.OpenClawInjectionSnapshot, err error) error
@@ -714,6 +715,47 @@ func (s *openClawConfigService) CompilePreview(userID int, plan OpenClawConfigPl
 		return nil, err
 	}
 	return s.previewFromCompiled(compiled)
+}
+
+func (s *openClawConfigService) PlanWithoutTeamMemberLeaderOnlyChannels(userID int, plan *OpenClawConfigPlan) (*OpenClawConfigPlan, error) {
+	if plan == nil || !hasOpenClawConfigSelections(*plan) {
+		return nil, nil
+	}
+
+	normalizedPlan := *plan
+	normalizedPlan.Mode = normalizePlanMode(normalizedPlan.Mode)
+	if normalizedPlan.Mode == "" {
+		normalizedPlan.Mode = OpenClawConfigPlanModeNone
+	}
+	if normalizedPlan.Mode == OpenClawConfigPlanModeNone {
+		return nil, nil
+	}
+
+	selected, _, err := s.loadSelectedResources(userID, normalizedPlan)
+	if err != nil {
+		return nil, err
+	}
+
+	keptResourceIDs := make([]int, 0, len(selected))
+	removed := false
+	for _, resource := range selected {
+		if isTeamMemberLeaderOnlyOpenClawChannel(resource) {
+			removed = true
+			continue
+		}
+		keptResourceIDs = append(keptResourceIDs, resource.ID)
+	}
+	if !removed {
+		return cloneOpenClawConfigPlan(plan), nil
+	}
+	if len(keptResourceIDs) == 0 {
+		return nil, nil
+	}
+
+	return &OpenClawConfigPlan{
+		Mode:        OpenClawConfigPlanModeManual,
+		ResourceIDs: keptResourceIDs,
+	}, nil
 }
 
 func (s *openClawConfigService) CreateSnapshotForInstance(userID int, instance *models.Instance, plan *OpenClawConfigPlan) (*models.OpenClawInjectionSnapshot, error) {
@@ -1666,6 +1708,21 @@ func detectOpenClawChannelProvider(resourceKey string, configPayload interface{}
 	}
 
 	return key
+}
+
+func isTeamMemberLeaderOnlyOpenClawChannel(resource models.OpenClawConfigResource) bool {
+	return normalizeResourceType(resource.ResourceType) == OpenClawConfigResourceTypeChannel
+}
+
+func cloneOpenClawConfigPlan(plan *OpenClawConfigPlan) *OpenClawConfigPlan {
+	if plan == nil {
+		return nil
+	}
+	clone := *plan
+	if plan.ResourceIDs != nil {
+		clone.ResourceIDs = append([]int(nil), plan.ResourceIDs...)
+	}
+	return &clone
 }
 
 // mergeOpenClawChannelConfigForStorage combines the allowlist-normalized config

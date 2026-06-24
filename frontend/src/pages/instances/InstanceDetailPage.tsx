@@ -319,6 +319,7 @@ const InstanceDetailPage: React.FC = () => {
   const [desktopStreamSavedProfile, setDesktopStreamSavedProfile] =
     useState<DesktopStreamProfile | "">("");
   const [desktopStreamMessage, setDesktopStreamMessage] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   const fetchMeta = useCallback(
     async (targetInstanceId: number, options?: { background?: boolean }) => {
@@ -495,6 +496,11 @@ const InstanceDetailPage: React.FC = () => {
 
     try {
       setActionLoading(action);
+      if (action === "restart") {
+        setActionMessage(t("instances.restartInProgress"));
+      } else {
+        setActionMessage(null);
+      }
       switch (action) {
         case "start":
           await instanceService.startInstance(instance.id);
@@ -504,6 +510,7 @@ const InstanceDetailPage: React.FC = () => {
           break;
         case "restart":
           await instanceService.restartInstance(instance.id);
+          setActionMessage(t("instances.restartSubmitted"));
           break;
         case "delete":
           await instanceService.deleteInstance(instance.id);
@@ -584,6 +591,22 @@ const InstanceDetailPage: React.FC = () => {
     }
   };
 
+  const saveDesktopStreamProfile = async () => {
+    if (!instance || desktopStreamProfile === desktopStreamSavedProfile) {
+      return true;
+    }
+
+    await instanceService.updateInstance(instance.id, {
+      desktop_stream_profile: desktopStreamProfile,
+    });
+    const updatedInstance = await instanceService.getInstance(instance.id);
+    setInstance(updatedInstance);
+    const savedProfile = updatedInstance.desktop_stream_profile || desktopStreamProfile;
+    setDesktopStreamSavedProfile(savedProfile);
+    setDesktopStreamProfile(savedProfile);
+    return true;
+  };
+
   const handleSaveDesktopStreamProfile = async () => {
     if (!instance || desktopStreamProfile === desktopStreamSavedProfile) {
       return;
@@ -592,17 +615,33 @@ const InstanceDetailPage: React.FC = () => {
     try {
       setActionLoading("desktop-stream-profile");
       setDesktopStreamMessage(null);
-      await instanceService.updateInstance(instance.id, {
-        desktop_stream_profile: desktopStreamProfile,
-      });
-      const updatedInstance = await instanceService.getInstance(instance.id);
-      setInstance(updatedInstance);
-      const savedProfile = updatedInstance.desktop_stream_profile || desktopStreamProfile;
-      setDesktopStreamSavedProfile(savedProfile);
-      setDesktopStreamProfile(savedProfile);
+      setActionMessage(null);
+      await saveDesktopStreamProfile();
       setDesktopStreamMessage(t("instances.desktopStreamSavedRestartRequired"));
     } catch (streamError) {
       console.error("Failed to update desktop stream profile", streamError);
+      setDesktopStreamMessage(t("instances.desktopStreamSaveFailed"));
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleApplyDesktopStreamProfile = async () => {
+    if (!instance) {
+      return;
+    }
+
+    try {
+      setActionLoading("desktop-stream-restart");
+      setDesktopStreamMessage(t("instances.restartInProgress"));
+      setActionMessage(t("instances.restartInProgress"));
+      await saveDesktopStreamProfile();
+      await instanceService.restartInstance(instance.id);
+      setDesktopStreamMessage(t("instances.restartSubmitted"));
+      setActionMessage(t("instances.restartSubmitted"));
+      await fetchMeta(instance.id, { background: true });
+    } catch (streamError) {
+      console.error("Failed to apply desktop stream profile", streamError);
       setDesktopStreamMessage(t("instances.desktopStreamSaveFailed"));
     } finally {
       setActionLoading(null);
@@ -966,6 +1005,7 @@ const InstanceDetailPage: React.FC = () => {
   const renderLiteWorkspace = () => (
     <div className="flex min-h-0 flex-col gap-4 md:h-[calc(100vh-8rem)]">
       {renderHeaderSection(shareLinkControl)}
+      {renderActionMessage()}
       <section className="grid min-h-0 flex-1 gap-4 overflow-hidden max-xl:overflow-y-auto xl:grid-cols-[minmax(0,1fr)_minmax(360px,28rem)]">
         <InstanceServiceFrame
           instanceId={instance.id}
@@ -993,6 +1033,16 @@ const InstanceDetailPage: React.FC = () => {
   });
   const attachedSkillIds = new Set(instanceSkills.map((item) => item.skill_id));
   const skillOptions = availableSkills.filter((skill) => !attachedSkillIds.has(skill.id));
+  const desktopStreamDirty = desktopStreamProfile !== desktopStreamSavedProfile;
+  const restartActionActive = actionLoading === "restart" || actionLoading === "desktop-stream-restart";
+
+  const renderActionMessage = () =>
+    actionMessage ? (
+      <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <RotateCw className={`h-4 w-4 ${restartActionActive ? "animate-spin" : ""}`} />
+        <span>{actionMessage}</span>
+      </div>
+    ) : null;
   const overviewResourceRows = resourceRows(runtimeDetails, instance).filter((row) =>
     ["CPU", "Memory", "Disk"].includes(row.label),
   );
@@ -1006,6 +1056,7 @@ const InstanceDetailPage: React.FC = () => {
   const renderProWorkspace = () => (
     <div className="flex flex-col gap-4">
       {renderHeaderSection(shareLinkControl)}
+      {renderActionMessage()}
       <section
         data-layout="pro-desktop-workspace"
         className="grid items-stretch gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,28rem)]"
@@ -1041,17 +1092,33 @@ const InstanceDetailPage: React.FC = () => {
                 {t("instances.desktopStreamProfileDesc")}
               </p>
             </div>
-            <button
-              type="button"
-              onClick={handleSaveDesktopStreamProfile}
-              disabled={
-                actionLoading === "desktop-stream-profile" ||
-                desktopStreamProfile === desktopStreamSavedProfile
-              }
-              className="app-button-secondary shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {actionLoading === "desktop-stream-profile" ? t("common.saving") : t("common.save")}
-            </button>
+            <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
+              <button
+                type="button"
+                onClick={handleSaveDesktopStreamProfile}
+                disabled={
+                  actionLoading === "desktop-stream-profile" ||
+                  actionLoading === "desktop-stream-restart" ||
+                  !desktopStreamDirty
+                }
+                className="app-button-secondary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {actionLoading === "desktop-stream-profile" ? t("common.saving") : t("common.save")}
+              </button>
+              <button
+                type="button"
+                onClick={handleApplyDesktopStreamProfile}
+                disabled={actionLoading === "desktop-stream-profile" || actionLoading === "desktop-stream-restart"}
+                className="app-button-primary disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RotateCw className={`h-4 w-4 ${actionLoading === "desktop-stream-restart" ? "animate-spin" : ""}`} />
+                {actionLoading === "desktop-stream-restart"
+                  ? t("instances.restarting")
+                  : desktopStreamDirty
+                    ? t("instances.saveAndRestart")
+                    : t("instances.restartNow")}
+              </button>
+            </div>
           </div>
           <div className="grid gap-2 sm:grid-cols-3">
             {DESKTOP_STREAM_PROFILES.map((profile) => {
