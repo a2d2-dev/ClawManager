@@ -52,6 +52,9 @@ func (s *instanceService) ValidateCreateRequests(userID int, requests []CreateIn
 		if _, err := marshalEnvironmentOverrides(environmentOverrides); err != nil {
 			return err
 		}
+		if _, ok := normalizeDesktopStreamProfile(requests[idx].DesktopStreamProfile); !ok {
+			return fmt.Errorf("invalid desktop stream profile")
+		}
 	}
 
 	quota, err := s.quotaRepo.GetByUserID(userID)
@@ -136,10 +139,11 @@ func (s *instanceService) ValidateCreateRequests(userID int, requests []CreateIn
 type CreateInstanceRequest struct {
 	Name                 string              `json:"name" validate:"required,min=3,max=50"`
 	Description          *string             `json:"description,omitempty"`
-	Type                 string              `json:"type" validate:"required,oneof=openclaw hermes"`
+	Type                 string              `json:"type" validate:"required,oneof=openclaw ubuntu debian centos custom webtop hermes"`
 	Mode                 string              `json:"mode" validate:"omitempty,oneof=lite pro"`
 	InstanceMode         string              `json:"instance_mode" validate:"omitempty,oneof=lite pro"`
 	RuntimeType          string              `json:"runtime_type" validate:"omitempty,oneof=gateway desktop shell"`
+	DesktopStreamProfile string              `json:"desktop_stream_profile,omitempty" validate:"omitempty,oneof=low standard high"`
 	CPUCores             float64             `json:"cpu_cores" validate:"required,min=0.1,max=32"`
 	MemoryGB             int                 `json:"memory_gb" validate:"required,min=1,max=128"`
 	DiskGB               int                 `json:"disk_gb" validate:"required,min=10,max=1000"`
@@ -177,8 +181,9 @@ type instanceModeLimitConfig struct {
 
 // UpdateInstanceRequest holds data for updating an instance
 type UpdateInstanceRequest struct {
-	Name        *string `json:"name,omitempty" validate:"omitempty,min=3,max=50"`
-	Description *string `json:"description,omitempty"`
+	Name                 *string `json:"name,omitempty" validate:"omitempty,min=3,max=50"`
+	Description          *string `json:"description,omitempty"`
+	DesktopStreamProfile *string `json:"desktop_stream_profile,omitempty" validate:"omitempty,oneof=low standard high"`
 }
 
 // InstanceStatus holds the status of an instance
@@ -268,6 +273,11 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	environmentOverrides, err := normalizeEnvironmentOverrides(req.EnvironmentOverrides)
 	if err != nil {
 		return nil, err
+	}
+	if profile, ok := normalizeDesktopStreamProfile(req.DesktopStreamProfile); !ok {
+		return nil, fmt.Errorf("invalid desktop stream profile")
+	} else if profile != "" {
+		environmentOverrides = applyDesktopStreamProfileEnv(environmentOverrides, profile)
 	}
 	environmentOverridesJSON, err := marshalEnvironmentOverrides(environmentOverrides)
 	if err != nil {
@@ -666,6 +676,7 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 
 	// Broadcast initial creating status via WebSocket. Sync service will mark it
 	// running only after the pod becomes Ready.
+	hydrateInstanceDesktopStreamProfile(instance)
 	GetHub().BroadcastInstanceStatus(userID, instance)
 	fmt.Printf("Instance %d status broadcast complete\n", instance.ID)
 
@@ -722,7 +733,12 @@ func (s *instanceService) createV2Instance(ctx context.Context, userID int, req 
 
 // GetByID gets an instance by ID
 func (s *instanceService) GetByID(id int) (*models.Instance, error) {
-	return s.instanceRepo.GetByID(id)
+	instance, err := s.instanceRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	hydrateInstanceDesktopStreamProfile(instance)
+	return instance, nil
 }
 
 // GetByUserID gets instances by user ID with pagination
@@ -731,6 +747,7 @@ func (s *instanceService) GetByUserID(userID int, offset, limit int) ([]models.I
 	if err != nil {
 		return nil, 0, err
 	}
+	hydrateInstancesDesktopStreamProfile(instances)
 
 	total, err := s.instanceRepo.CountByUserID(userID)
 	if err != nil {
@@ -745,6 +762,7 @@ func (s *instanceService) GetAllInstances(offset, limit int) ([]models.Instance,
 	if err != nil {
 		return nil, 0, err
 	}
+	hydrateInstancesDesktopStreamProfile(instances)
 
 	total, err := s.instanceRepo.CountAll()
 	if err != nil {
@@ -752,6 +770,23 @@ func (s *instanceService) GetAllInstances(offset, limit int) ([]models.Instance,
 	}
 
 	return instances, total, nil
+}
+
+func hydrateInstancesDesktopStreamProfile(instances []models.Instance) {
+	for idx := range instances {
+		hydrateInstanceDesktopStreamProfile(&instances[idx])
+	}
+}
+
+func hydrateInstanceDesktopStreamProfile(instance *models.Instance) {
+	if instance == nil {
+		return
+	}
+	environmentOverrides, err := parseEnvironmentOverridesJSON(instance.EnvironmentOverridesJSON)
+	if err != nil {
+		return
+	}
+	instance.DesktopStreamProfile = desktopStreamProfileFromEnv(environmentOverrides)
 }
 
 // Start starts an instance
@@ -1609,6 +1644,22 @@ func (s *instanceService) Update(instanceID int, req UpdateInstanceRequest) erro
 	}
 	if req.Description != nil {
 		instance.Description = req.Description
+	}
+	if req.DesktopStreamProfile != nil {
+		profile, ok := normalizeDesktopStreamProfile(*req.DesktopStreamProfile)
+		if !ok || profile == "" {
+			return fmt.Errorf("invalid desktop stream profile")
+		}
+		environmentOverrides, err := parseEnvironmentOverridesJSON(instance.EnvironmentOverridesJSON)
+		if err != nil {
+			return err
+		}
+		environmentOverrides = applyDesktopStreamProfileEnv(environmentOverrides, profile)
+		environmentOverridesJSON, err := marshalEnvironmentOverrides(environmentOverrides)
+		if err != nil {
+			return err
+		}
+		instance.EnvironmentOverridesJSON = environmentOverridesJSON
 	}
 
 	instance.UpdatedAt = time.Now()

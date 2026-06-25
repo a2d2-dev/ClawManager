@@ -256,7 +256,7 @@ export function useInstanceDesktopAccess({
           return;
         }
 
-        const nextEmbedUrl = resolveEmbedUrl(data.proxy_url || data.access_url);
+        const nextEmbedUrl = resolveEmbedUrl(data.access_url || data.proxy_url);
         const nextExpiresAt = new Date(data.expires_at);
         const previousEmbedUrl = embedUrlRef.current;
 

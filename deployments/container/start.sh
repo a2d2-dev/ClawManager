@@ -96,6 +96,15 @@ esac
 
 sed -i "s/client_max_body_size [0-9][0-9]*m;/client_max_body_size ${CLAWMANAGER_WORKSPACE_ARCHIVE_MAX_MIB}m;/" /etc/nginx/nginx.conf
 
+# Resolve the cluster DNS server for nginx so the desktop location can resolve
+# per-instance Service FQDNs at request time. Prefer the first nameserver from
+# /etc/resolv.conf, falling back to the common in-cluster DNS ClusterIP.
+DNS_RESOLVER="$(awk '/^nameserver/ {print $2; exit}' /etc/resolv.conf 2>/dev/null || true)"
+if [ -z "${DNS_RESOLVER}" ]; then
+  DNS_RESOLVER="10.96.0.10"
+fi
+sed -i "s/__DNS_RESOLVER__/${DNS_RESOLVER}/g" /etc/nginx/nginx.conf
+
 /usr/local/bin/clawreef-server &
 backend_pid=$!
 

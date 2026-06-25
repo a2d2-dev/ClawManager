@@ -123,9 +123,14 @@ func (s *PVCService) CreatePVC(ctx context.Context, userID, instanceID int, stor
 		return nil, fmt.Errorf("failed to create PVC %s: %w", pvcName, err)
 	}
 
-	// Wait for PVC to be bound, if not bound within timeout, create PV manually
-	fmt.Printf("PVC %s created, scheduling async binding monitor...\n", pvcName)
-	go s.monitorPVCBinding(context.Background(), namespace, pvcName, userID, instanceID, storageSizeGB, storageClass, s.pvcBindTimeout())
+	if s.shouldUseManualHostPathFallback(storageClass) {
+		fmt.Printf("PVC %s created, scheduling manual hostPath binding monitor...\n", pvcName)
+		go s.monitorPVCBinding(context.Background(), namespace, pvcName, userID, instanceID, storageSizeGB, storageClass, s.pvcBindTimeout())
+	} else if usesManualHostPathFallback(storageClass) {
+		fmt.Printf("PVC %s created with manual storageClass, but hostPath fallback is disabled for storage profile %q\n", pvcName, s.storageProfile())
+	} else {
+		fmt.Printf("PVC %s created with dynamic storageClass %s, leaving binding to the provisioner\n", pvcName, storageClass)
+	}
 
 	return createdPVC, nil
 }
@@ -190,7 +195,7 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 						return nil, err
 					}
 				}
-				if existingPVC.Status.Phase != corev1.ClaimBound {
+				if existingPVC.Status.Phase != corev1.ClaimBound && s.shouldUseManualHostPathFallback(storageClass) {
 					go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, s.pvcBindTimeout())
 				}
 				return existingPVC, nil
@@ -204,8 +209,18 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 			return nil, err
 		}
 	}
-	go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, s.pvcBindTimeout())
+	if s.shouldUseManualHostPathFallback(storageClass) {
+		go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, s.pvcBindTimeout())
+	}
 	return createdPVC, nil
+}
+
+func usesManualHostPathFallback(storageClass string) bool {
+	return strings.EqualFold(strings.TrimSpace(storageClass), "manual")
+}
+
+func (s *PVCService) shouldUseManualHostPathFallback(storageClass string) bool {
+	return s.hostPathFallbackEnabled() && usesManualHostPathFallback(storageClass)
 }
 
 func (s *PVCService) monitorTeamSharedPVCBinding(ctx context.Context, namespace, pvcName string, userID, teamID, storageSizeGB int, storageClass string, timeout time.Duration) {
@@ -230,10 +245,14 @@ func (s *PVCService) waitForTeamSharedPVCBinding(ctx context.Context, namespace,
 	for {
 		select {
 		case <-timeoutChan:
-			if !s.hostPathFallbackEnabled() {
+			if usesManualHostPathFallback(storageClass) && !s.hostPathFallbackEnabled() {
 				return nil, fmt.Errorf("Team shared PVC %s was not bound after %s and hostPath fallback is disabled for storage profile %q", pvcName, timeout, s.storageProfile())
 			}
-			fmt.Printf("Team shared PVC %s binding timeout, creating hostPath PV manually\n", pvcName)
+			if !usesManualHostPathFallback(storageClass) {
+				fmt.Printf("Team shared PVC %s binding timeout with dynamic storageClass %s, leaving binding to the provisioner\n", pvcName, storageClass)
+				return pvc, nil
+			}
+			fmt.Printf("Team shared PVC %s binding timeout, creating hostPath RWX PV manually\n", pvcName)
 			return s.createPVForTeamSharedPVC(ctx, namespace, pvcName, userID, teamID, storageSizeGB, storageClass)
 		case <-ticker.C:
 			pvc, err := s.client.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
@@ -639,9 +658,14 @@ func (s *PVCService) waitForPVCBinding(ctx context.Context, namespace, pvcName s
 	for {
 		select {
 		case <-timeoutChan:
-			if !s.hostPathFallbackEnabled() {
+			if usesManualHostPathFallback(storageClass) && !s.hostPathFallbackEnabled() {
 				return nil, fmt.Errorf("PVC %s was not bound after %s and hostPath fallback is disabled for storage profile %q", pvcName, timeout, s.storageProfile())
 			}
+			if !usesManualHostPathFallback(storageClass) {
+				fmt.Printf("PVC %s binding timeout with dynamic storageClass %s, leaving binding to the provisioner\n", pvcName, storageClass)
+				return pvc, nil
+			}
+			// Timeout, try to create PV manually.
 			fmt.Printf("PVC %s binding timeout, creating PV manually\n", pvcName)
 			return s.createPVForPVC(ctx, namespace, pvcName, userID, instanceID, storageSizeGB, storageClass)
 		case <-ticker.C:

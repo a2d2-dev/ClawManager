@@ -1860,6 +1860,24 @@ export const translations: Record<Locale, TranslationTree> = {
       presetCpuShort: "CPU",
       presetRamShort: "RAM",
       presetDiskShort: "Disk",
+      desktopStreamProfile: "Desktop Stream Profile",
+      desktopStreamSettings: "Stream Settings",
+      desktopStreamProfileDesc:
+        "Choose the Selkies desktop streaming balance. Resolution remains adaptive to the browser window.",
+      desktopStreamLow: "Low",
+      desktopStreamLowDesc:
+        "Best for weak networks and large concurrency. Keeps motion usable while reducing clarity.",
+      desktopStreamStandard: "Standard",
+      desktopStreamStandardDesc:
+        "Balanced default with responsive motion and moderate clarity.",
+      desktopStreamHigh: "High",
+      desktopStreamHighDesc:
+        "Smoother motion with higher bandwidth and CPU usage.",
+      restartRequiredAfterChange:
+        "Changes take effect after the instance is restarted.",
+      desktopStreamSavedRestartRequired:
+        "Stream profile saved. Restart the instance for it to take effect.",
+      desktopStreamSaveFailed: "Failed to save stream profile.",
       environmentVariables: "Environment Variables",
       clawManagerBuiltIns: "ClawManager Built-ins",
       hideBuiltIns: "Hide Built-ins",
@@ -3126,6 +3144,19 @@ export const translations: Record<Locale, TranslationTree> = {
       presetCpuShort: "CPU",
       presetRamShort: "RAM",
       presetDiskShort: "磁盘",
+      desktopStreamProfile: "桌面流档位",
+      desktopStreamSettings: "桌面流设置",
+      desktopStreamProfileDesc:
+        "选择 Selkies 桌面流的流畅度与带宽平衡。分辨率仍会跟随浏览器窗口动态适配。",
+      desktopStreamLow: "低带宽",
+      desktopStreamLowDesc: "适合弱网和高并发场景。保留可用帧率，降低清晰度。",
+      desktopStreamStandard: "标准",
+      desktopStreamStandardDesc: "适合日常桌面操作，兼顾跟手感和清晰度。",
+      desktopStreamHigh: "高清",
+      desktopStreamHighDesc: "画面更顺滑，但会占用更多带宽和 CPU。",
+      restartRequiredAfterChange: "修改会在实例重启后生效。",
+      desktopStreamSavedRestartRequired: "桌面流档位已保存，请重启实例后生效。",
+      desktopStreamSaveFailed: "保存桌面流档位失败。",
       environmentVariables: "环境变量",
       clawManagerBuiltIns: "ClawManager 内置变量",
       hideBuiltIns: "收起内置变量",
@@ -4373,6 +4404,24 @@ export const translations: Record<Locale, TranslationTree> = {
       presetCpuShort: "CPU",
       presetRamShort: "RAM",
       presetDiskShort: "ディスク",
+      desktopStreamProfile: "Desktop Stream Profile",
+      desktopStreamSettings: "Stream Settings",
+      desktopStreamProfileDesc:
+        "Choose the Selkies desktop streaming balance. Resolution remains adaptive to the browser window.",
+      desktopStreamLow: "Low",
+      desktopStreamLowDesc:
+        "Best for weak networks and large concurrency. Keeps motion usable while reducing clarity.",
+      desktopStreamStandard: "Standard",
+      desktopStreamStandardDesc:
+        "Balanced default with responsive motion and moderate clarity.",
+      desktopStreamHigh: "High",
+      desktopStreamHighDesc:
+        "Smoother motion with higher bandwidth and CPU usage.",
+      restartRequiredAfterChange:
+        "Changes take effect after the instance is restarted.",
+      desktopStreamSavedRestartRequired:
+        "Stream profile saved. Restart the instance for it to take effect.",
+      desktopStreamSaveFailed: "Failed to save stream profile.",
       environmentVariables: "環境変数",
       clawManagerBuiltIns: "ClawManager 組み込み変数",
       hideBuiltIns: "組み込み変数を隠す",
@@ -5630,6 +5679,24 @@ export const translations: Record<Locale, TranslationTree> = {
       presetCpuShort: "CPU",
       presetRamShort: "RAM",
       presetDiskShort: "디스크",
+      desktopStreamProfile: "Desktop Stream Profile",
+      desktopStreamSettings: "Stream Settings",
+      desktopStreamProfileDesc:
+        "Choose the Selkies desktop streaming balance. Resolution remains adaptive to the browser window.",
+      desktopStreamLow: "Low",
+      desktopStreamLowDesc:
+        "Best for weak networks and large concurrency. Keeps motion usable while reducing clarity.",
+      desktopStreamStandard: "Standard",
+      desktopStreamStandardDesc:
+        "Balanced default with responsive motion and moderate clarity.",
+      desktopStreamHigh: "High",
+      desktopStreamHighDesc:
+        "Smoother motion with higher bandwidth and CPU usage.",
+      restartRequiredAfterChange:
+        "Changes take effect after the instance is restarted.",
+      desktopStreamSavedRestartRequired:
+        "Stream profile saved. Restart the instance for it to take effect.",
+      desktopStreamSaveFailed: "Failed to save stream profile.",
       environmentVariables: "환경 변수",
       clawManagerBuiltIns: "ClawManager 내장 변수",
       hideBuiltIns: "내장 변수 숨기기",
@@ -6912,6 +6979,24 @@ export const translations: Record<Locale, TranslationTree> = {
       presetCpuShort: "CPU",
       presetRamShort: "RAM",
       presetDiskShort: "Disk",
+      desktopStreamProfile: "Desktop Stream Profile",
+      desktopStreamSettings: "Stream Settings",
+      desktopStreamProfileDesc:
+        "Choose the Selkies desktop streaming balance. Resolution remains adaptive to the browser window.",
+      desktopStreamLow: "Low",
+      desktopStreamLowDesc:
+        "Best for weak networks and large concurrency. Keeps motion usable while reducing clarity.",
+      desktopStreamStandard: "Standard",
+      desktopStreamStandardDesc:
+        "Balanced default with responsive motion and moderate clarity.",
+      desktopStreamHigh: "High",
+      desktopStreamHighDesc:
+        "Smoother motion with higher bandwidth and CPU usage.",
+      restartRequiredAfterChange:
+        "Changes take effect after the instance is restarted.",
+      desktopStreamSavedRestartRequired:
+        "Stream profile saved. Restart the instance for it to take effect.",
+      desktopStreamSaveFailed: "Failed to save stream profile.",
       environmentVariables: "Umgebungsvariablen",
       clawManagerBuiltIns: "ClawManager Built-ins",
       hideBuiltIns: "Built-ins ausblenden",

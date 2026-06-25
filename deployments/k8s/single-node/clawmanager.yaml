@@ -1158,6 +1158,33 @@ subjects:
     name: clawmanager-app
     namespace: clawmanager-system
 ---
+# Explicit lease permissions for control-plane leader election. The
+# cluster-admin binding above already covers this; this Role documents the
+# requirement and keeps leader election working if RBAC is tightened later.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: clawmanager-app-leaderelection
+  namespace: clawmanager-system
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: clawmanager-app-leaderelection
+  namespace: clawmanager-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: clawmanager-app-leaderelection
+subjects:
+  - kind: ServiceAccount
+    name: clawmanager-app
+    namespace: clawmanager-system
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -1311,6 +1338,21 @@ spec:
               value: "redis://clawmanager-redis.clawmanager-system.svc.cluster.local:6379/0"
             - name: TEAM_REDIS_URL
               value: "redis://clawmanager-redis.clawmanager-system.svc.cluster.local:6379/0"
+            - name: CLAWMANAGER_DESKTOP_DIRECT_PROXY
+              value: "true"
+            # Leader election for control-plane singleton background loops.
+            # Required before scaling replicas > 1 so SyncService / Team event
+            # consumers / stale-task monitor run on exactly one replica.
+            - name: CLAWMANAGER_LEADER_ELECTION
+              value: "true"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: CLAWMANAGER_TEAM_REDIS_URL
               value: "redis://clawmanager-redis.clawmanager-system.svc.cluster.local:6379/0"
             - name: CLAWMANAGER_TEAM_MANAGER_BASE_URL

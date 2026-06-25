@@ -20,6 +20,7 @@ import {
   systemSettingsService,
   type SystemImageSetting,
 } from "../../services/systemSettingsService";
+import type { DesktopStreamProfile } from "../../types/instance";
 
 type BuiltInEnvTemplate = {
   key: string;
@@ -46,6 +47,31 @@ const CUSTOM_RESOURCE_PRESET = "custom";
 const SKILLS_PER_PAGE = 6;
 const supportsRuntimeInjection = (type: string) =>
   type === "openclaw" || type === "hermes";
+const DESKTOP_STREAM_PROFILES: Array<{
+  id: DesktopStreamProfile;
+  labelKey: string;
+  descriptionKey: string;
+  details: string;
+}> = [
+  {
+    id: "low",
+    labelKey: "instances.desktopStreamLow",
+    descriptionKey: "instances.desktopStreamLowDesc",
+    details: "30 FPS / CRF 42",
+  },
+  {
+    id: "standard",
+    labelKey: "instances.desktopStreamStandard",
+    descriptionKey: "instances.desktopStreamStandardDesc",
+    details: "35 FPS / CRF 34",
+  },
+  {
+    id: "high",
+    labelKey: "instances.desktopStreamHigh",
+    descriptionKey: "instances.desktopStreamHighDesc",
+    details: "40 FPS / CRF 24",
+  },
+];
 
 const runtimeWorkspaceDirectory = (type: string) =>
   type === "hermes" ? ".hermes" : ".openclaw";
@@ -442,6 +468,8 @@ const CreateInstancePage: React.FC = () => {
     Record<string, string>
   >({});
   const [customEnvRows, setCustomEnvRows] = useState<CustomEnvRow[]>([]);
+  const [desktopStreamProfile, setDesktopStreamProfile] =
+    useState<DesktopStreamProfile>("standard");
   const [resourcePresetMode, setResourcePresetMode] = useState<
     keyof typeof PRESET_CONFIGS | typeof CUSTOM_RESOURCE_PRESET
   >("medium");
@@ -821,6 +849,8 @@ const CreateInstancePage: React.FC = () => {
           : PRESET_CONFIGS.small.disk_gb,
         gpu_enabled: usesDedicatedResources ? formData.gpu_enabled : false,
         gpu_count: usesDedicatedResources ? formData.gpu_count : 0,
+        desktop_stream_profile:
+          selectedRuntimeType === "desktop" ? desktopStreamProfile : undefined,
         image_registry: selectedRuntimeImage?.image,
         image_tag: selectedRuntimeImage ? undefined : formData.image_tag,
         environment_overrides: overrides,
@@ -1575,6 +1605,54 @@ const CreateInstancePage: React.FC = () => {
                           </div>
                         )}
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {selectedRuntimeType === "desktop" && (
+                  <div className="mt-6 rounded-[24px] border border-gray-200 bg-gray-50/80 p-4">
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-gray-500">
+                          {t("instances.desktopStreamProfile")}
+                        </h3>
+                        <p className="mt-2 text-sm text-gray-500">
+                          {t("instances.desktopStreamProfileDesc")}
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-500">
+                        {t("instances.restartRequiredAfterChange")}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
+                      {DESKTOP_STREAM_PROFILES.map((profile) => {
+                        const selected = desktopStreamProfile === profile.id;
+                        return (
+                          <button
+                            key={profile.id}
+                            type="button"
+                            onClick={() => setDesktopStreamProfile(profile.id)}
+                            className={`flex min-h-[138px] flex-col justify-between rounded-[20px] border p-4 text-left transition ${
+                              selected
+                                ? "border-indigo-500 bg-white ring-2 ring-indigo-500"
+                                : "border-gray-200 bg-white hover:border-indigo-200"
+                            }`}
+                          >
+                            <div>
+                              <h4 className="text-sm font-semibold text-gray-900">
+                                {t(profile.labelKey)}
+                              </h4>
+                              <p className="mt-2 text-sm leading-5 text-gray-500">
+                                {t(profile.descriptionKey)}
+                              </p>
+                            </div>
+                            <p className="mt-4 font-mono text-xs text-gray-400">
+                              {profile.details}
+                            </p>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

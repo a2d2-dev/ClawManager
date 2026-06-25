@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -118,5 +119,56 @@ func TestInstanceDeploymentServiceEnsureAndScale(t *testing.T) {
 	}
 	if scaled.Spec.Replicas == nil || *scaled.Spec.Replicas != 0 {
 		t.Fatalf("scaled replicas = %#v, want 0", scaled.Spec.Replicas)
+	}
+}
+
+func TestInstanceDeploymentServiceEnsureDeletesLegacyDeployments(t *testing.T) {
+	client := &Client{Clientset: fake.NewSimpleClientset(), Namespace: "clawreef"}
+	service := &InstanceDeploymentService{
+		client:           client,
+		namespaceService: &NamespaceService{client: client},
+	}
+	ctx := context.Background()
+	namespace := "clawreef-user-9"
+	if _, err := client.Clientset.AppsV1().Deployments(namespace).Create(ctx, &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "clawreef-44-old-name",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":         "clawreef",
+				"instance-id": "44",
+				"managed-by":  "clawreef",
+			},
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create legacy deployment: %v", err)
+	}
+
+	if _, err := service.EnsureDeployment(ctx, PodConfig{
+		InstanceID:    44,
+		InstanceName:  "Pro Desktop",
+		UserID:        9,
+		Type:          "openclaw",
+		RuntimeType:   "desktop",
+		CPUCores:      2,
+		MemoryGB:      4,
+		Image:         "registry/openclaw:v2",
+		MountPath:     "/config",
+		ContainerPort: 3001,
+	}, 1); err != nil {
+		t.Fatalf("EnsureDeployment returned error: %v", err)
+	}
+
+	deployments, err := client.Clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "instance-id=44",
+	})
+	if err != nil {
+		t.Fatalf("list deployments: %v", err)
+	}
+	if len(deployments.Items) != 1 {
+		t.Fatalf("deployment count = %d, want 1: %#v", len(deployments.Items), deployments.Items)
+	}
+	if got := deployments.Items[0].Name; got != "clawreef-44-deployment" {
+		t.Fatalf("remaining deployment = %q, want stable deployment", got)
 	}
 }

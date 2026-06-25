@@ -60,7 +60,7 @@ func TestInstanceProxyServiceUsesRuntimeBindingForV2(t *testing.T) {
 	}
 	accessService := NewInstanceAccessService()
 	defer accessService.Stop()
-	token, err := accessService.GenerateToken(45, 123, "openclaw", "/api/v1/instances/123/proxy/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(45, 123, "openclaw", "/api/v1/instances/123/proxy/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestInstanceProxyServiceInjectsInstanceTokenForHermesLite(t *testing.T) {
 	}
 	accessService := NewInstanceAccessService()
 	defer accessService.Stop()
-	token, err := accessService.GenerateToken(45, 127, "hermes", "/api/v1/instances/127/proxy/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(45, 127, "hermes", "/api/v1/instances/127/proxy/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestInstanceProxyServiceUsesHermesLiteAccessURLForRootEntry(t *testing.T) {
 	}
 	accessService := NewInstanceAccessService()
 	defer accessService.Stop()
-	token, err := accessService.GenerateToken(45, 131, "hermes", "/api/v1/instances/131/proxy/chat/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(45, 131, "hermes", "/api/v1/instances/131/proxy/chat/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestInstanceProxyServicePreservesHermesRuntimeQueryToken(t *testing.T) {
 	}
 	accessService := NewInstanceAccessService()
 	defer accessService.Stop()
-	token, err := accessService.GenerateToken(45, 130, "hermes", "/api/v1/instances/130/proxy/chat/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(45, 130, "hermes", "/api/v1/instances/130/proxy/chat/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}
@@ -328,7 +328,7 @@ func TestInstanceProxyServiceRewritesHermesLiteHTMLBase(t *testing.T) {
 	}
 	accessService := NewInstanceAccessService()
 	defer accessService.Stop()
-	token, err := accessService.GenerateToken(45, 128, "hermes", "/api/v1/instances/128/proxy/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(45, 128, "hermes", "/api/v1/instances/128/proxy/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestInstanceProxyServiceProxiesHermesLiteWebSocket(t *testing.T) {
 	}
 	accessService := NewInstanceAccessService()
 	defer accessService.Stop()
-	token, err := accessService.GenerateToken(45, 129, "hermes", "/api/v1/instances/129/proxy/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(45, 129, "hermes", "/api/v1/instances/129/proxy/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestInstanceProxyServiceReturnsUnavailableWhenV2BindingMissing(t *testing.T
 	}
 	accessService := NewInstanceAccessService()
 	defer accessService.Stop()
-	token, err := accessService.GenerateToken(45, 124, "hermes", "/api/v1/instances/124/proxy/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(45, 124, "hermes", "/api/v1/instances/124/proxy/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}
@@ -663,7 +663,7 @@ func newV2ProxyTestService(t *testing.T, instanceRepo repository.InstanceReposit
 	t.Helper()
 	accessService := NewInstanceAccessService()
 	t.Cleanup(accessService.Stop)
-	token, err := accessService.GenerateToken(userID, instanceID, instanceType, "/api/v1/instances/"+strconv.Itoa(instanceID)+"/proxy/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(userID, instanceID, instanceType, "/api/v1/instances/"+strconv.Itoa(instanceID)+"/proxy/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}

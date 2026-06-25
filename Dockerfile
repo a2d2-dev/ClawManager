@@ -30,13 +30,16 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -trimpat
 
 FROM nginx:1.27-alpine
 
-RUN apk add --no-cache dumb-init openssl
+# nginx-module-njs provides ngx_http_js_module.so, loaded by nginx.conf to run
+# the desktop access-token verification (deployments/nginx/njs/desktop_auth.js).
+RUN apk add --no-cache dumb-init openssl nginx-module-njs
 
 WORKDIR /app
 
 COPY --from=backend-builder /out/clawreef-server /usr/local/bin/clawreef-server
 COPY --from=frontend-builder /app/frontend/dist /usr/share/nginx/html
 COPY deployments/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY deployments/nginx/njs/desktop_auth.js /etc/nginx/njs/desktop_auth.js
 COPY deployments/container/start.sh /app/start.sh
 
 RUN chmod +x /app/start.sh \

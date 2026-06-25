@@ -659,6 +659,18 @@ func (s *InstanceProxyService) GetTargetPortForInstance(instance *models.Instanc
 	return buildRuntimeConfig(instance.Type, instance.OSType, instance.OSVersion, instance.ImageRegistry, instance.ImageTag).Port
 }
 
+// ResolveUpstreamHostPort ensures the instance Service exists and returns its
+// cluster-internal "host:port" target so the edge gateway can proxy directly to
+// the instance without routing pixel traffic through this control-plane process.
+func (s *InstanceProxyService) ResolveUpstreamHostPort(ctx context.Context, userID, instanceID int, targetPort int32) (string, error) {
+	serviceInfo, err := s.getOrCreateService(ctx, userID, instanceID, targetPort)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve upstream service: %w", err)
+	}
+
+	return fmt.Sprintf("%s.%s.svc.cluster.local:%d", serviceInfo.Name, serviceInfo.Namespace, serviceInfo.TargetPort), nil
+}
+
 func (s *InstanceProxyService) resolveTargetPort(instanceType string, defaultPort int32, targetPath string) int32 {
 	if usesWebtopImage(instanceType) {
 		if defaultPort == 0 {
@@ -732,6 +744,13 @@ func (s *InstanceProxyService) shouldRewriteHTMLForProxy(instanceID int, instanc
 		}
 	}
 	return s.shouldRewriteHTML(instanceType)
+}
+
+// IsWebtopInstanceType reports whether the instance type is served by a
+// Webtop/KasmVNC desktop image (and therefore eligible for direct gateway
+// proxying via SUBFOLDER-prefixed paths).
+func (s *InstanceProxyService) IsWebtopInstanceType(instanceType string) bool {
+	return usesWebtopImage(instanceType)
 }
 
 func (s *InstanceProxyService) getCachedService(key serviceCacheKey) *k8s.ServiceInfo {

@@ -73,6 +73,35 @@ func TestBuildInstancePodEnvAppliesOverridesAfterDefaults(t *testing.T) {
 	}
 }
 
+func TestBuildInstancePodEnvNormalizesDesktopStreamProfile(t *testing.T) {
+	raw, err := marshalEnvironmentOverrides(map[string]string{
+		"CLAWMANAGER_DESKTOP_STREAM_PROFILE": "standard",
+		"SELKIES_ENCODER":                    "x264enc",
+		"SELKIES_FRAMERATE":                  "35",
+		"SELKIES_H264_CRF":                   "34",
+	})
+	if err != nil {
+		t.Fatalf("marshalEnvironmentOverrides returned error: %v", err)
+	}
+
+	env, err := buildInstancePodEnv(&models.Instance{
+		ID:                       42,
+		Type:                     "openclaw",
+		RuntimeType:              RuntimeBackendDesktop,
+		EnvironmentOverridesJSON: raw,
+	}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("buildInstancePodEnv returned error: %v", err)
+	}
+
+	if got := env["SELKIES_ENCODER"]; got != "x264enc,jpeg" {
+		t.Fatalf("SELKIES_ENCODER = %q, want x264enc,jpeg", got)
+	}
+	if got := env["SELKIES_USE_CSS_SCALING"]; got != "true" {
+		t.Fatalf("SELKIES_USE_CSS_SCALING = %q, want true", got)
+	}
+}
+
 func TestPopSHMSizeGB(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -43,6 +43,9 @@ func (s *InstanceDeploymentService) EnsureDeployment(ctx context.Context, config
 
 	desired := BuildInstanceDeployment(s.client, config, replicas)
 	deployments := s.client.Clientset.AppsV1().Deployments(desired.Namespace)
+	if err := s.deleteLegacyDeployments(ctx, desired.Namespace, config.InstanceID, desired.Name); err != nil {
+		return nil, err
+	}
 	existing, err := deployments.Get(ctx, desired.Name, metav1.GetOptions{})
 	if errors.IsNotFound(err) {
 		created, createErr := deployments.Create(ctx, desired, metav1.CreateOptions{})
@@ -73,6 +76,27 @@ func (s *InstanceDeploymentService) EnsureDeployment(ctx context.Context, config
 		return nil, fmt.Errorf("failed to update instance deployment %s/%s: %w", desired.Namespace, desired.Name, updateErr)
 	}
 	return result, nil
+}
+
+func (s *InstanceDeploymentService) deleteLegacyDeployments(ctx context.Context, namespace string, instanceID int, expectedName string) error {
+	deployments := s.client.Clientset.AppsV1().Deployments(namespace)
+	items, err := deployments.List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("instance-id=%d", instanceID),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list instance deployments %s/instance-id=%d: %w", namespace, instanceID, err)
+	}
+
+	for _, item := range items.Items {
+		if item.Name == expectedName {
+			continue
+		}
+		propagation := metav1.DeletePropagationForeground
+		if err := deployments.Delete(ctx, item.Name, metav1.DeleteOptions{PropagationPolicy: &propagation}); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete legacy instance deployment %s/%s: %w", namespace, item.Name, err)
+		}
+	}
+	return nil
 }
 
 func (s *InstanceDeploymentService) ScaleDeployment(ctx context.Context, userID, instanceID int, replicas int32) error {

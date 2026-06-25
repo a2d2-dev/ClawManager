@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"clawreef/internal/models"
@@ -20,7 +21,10 @@ type SyncService struct {
 	podService           *k8s.PodService
 	deploymentService    *k8s.InstanceDeploymentService
 	interval             time.Duration
-	stopChan             chan struct{}
+
+	mu       sync.Mutex
+	running  bool
+	stopChan chan struct{}
 }
 
 // NewSyncService creates a new sync service
@@ -31,23 +35,40 @@ func NewSyncService(instanceRepo repository.InstanceRepository, runtimeStatusSer
 		podService:           k8s.NewPodService(),
 		deploymentService:    k8s.NewInstanceDeploymentService(),
 		interval:             5 * time.Second, // Sync every 5 seconds for more responsive status updates
-		stopChan:             make(chan struct{}),
 	}
 }
 
-// Start starts the sync service
+// Start starts the sync loop. It is safe to call repeatedly: a second call
+// while already running is a no-op, and after Stop the service can be started
+// again (used by leader-election re-acquisition).
 func (s *SyncService) Start() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return
+	}
+	s.stopChan = make(chan struct{})
+	s.running = true
 	fmt.Println("Starting K8s state sync service...")
-	go s.syncLoop()
+	go s.syncLoop(s.stopChan)
 }
 
-// Stop stops the sync service
+// Stop stops the sync loop. It is idempotent: calling Stop when not running is
+// a no-op, and it never closes the same channel twice.
 func (s *SyncService) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.running {
+		return
+	}
 	close(s.stopChan)
+	s.running = false
 }
 
-// syncLoop runs the synchronization loop
-func (s *SyncService) syncLoop() {
+// syncLoop runs the synchronization loop until its stop channel is closed. The
+// channel is passed in (rather than read from the struct) so a restarted loop
+// never races with a previously stopped one.
+func (s *SyncService) syncLoop(stop <-chan struct{}) {
 	fmt.Printf("[SyncService] Starting sync loop with interval %v\n", s.interval)
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -62,7 +83,7 @@ func (s *SyncService) syncLoop() {
 		case <-ticker.C:
 			fmt.Println("[SyncService] Tick - running scheduled sync...")
 			s.syncAllInstances()
-		case <-s.stopChan:
+		case <-stop:
 			fmt.Println("[SyncService] Stopping K8s state sync service...")
 			return
 		}

@@ -117,6 +117,7 @@ func buildInstancePodEnv(instance *models.Instance, runtimeEnv, gatewayEnv, agen
 	if err != nil {
 		return nil, err
 	}
+	overrides = ensureDesktopStreamProfileEnv(overrides, instance.RuntimeType)
 
 	resolved := mergeEnvMaps(runtimeEnv, mergeEnvMaps(gatewayEnv, agentEnv))
 	resolved = withInstanceProxyEnv(instance.Type, instance.ID, resolved)

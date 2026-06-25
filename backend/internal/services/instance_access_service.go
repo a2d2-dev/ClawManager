@@ -18,6 +18,7 @@ type AccessToken struct {
 	InstanceType string    `json:"instance_type"`
 	TargetPort   int32     `json:"target_port"`
 	AccessURL    string    `json:"access_url"`
+	Upstream     string    `json:"upstream"`
 	ExpiresAt    time.Time `json:"expires_at"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -36,6 +37,7 @@ type instanceAccessClaims struct {
 	InstanceType string `json:"instance_type"`
 	TargetPort   int32  `json:"target_port"`
 	AccessURL    string `json:"access_url"`
+	Upstream     string `json:"upstream"`
 	TokenType    string `json:"token_type"`
 	jwt.RegisteredClaims
 }
@@ -55,7 +57,7 @@ func NewInstanceAccessService() *InstanceAccessService {
 }
 
 // GenerateToken generates a new access token for an instance
-func (s *InstanceAccessService) GenerateToken(userID, instanceID int, instanceType string, accessURL string, targetPort int32, duration time.Duration) (*AccessToken, error) {
+func (s *InstanceAccessService) GenerateToken(userID, instanceID int, instanceType string, accessURL string, upstream string, targetPort int32, duration time.Duration) (*AccessToken, error) {
 	now := time.Now()
 	expiresAt := now.Add(duration)
 
@@ -65,6 +67,7 @@ func (s *InstanceAccessService) GenerateToken(userID, instanceID int, instanceTy
 		InstanceType: instanceType,
 		TargetPort:   targetPort,
 		AccessURL:    accessURL,
+		Upstream:     upstream,
 		TokenType:    "instance_access",
 		RegisteredClaims: jwt.RegisteredClaims{
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -85,6 +88,7 @@ func (s *InstanceAccessService) GenerateToken(userID, instanceID int, instanceTy
 		InstanceType: instanceType,
 		TargetPort:   targetPort,
 		AccessURL:    accessURL,
+		Upstream:     upstream,
 		ExpiresAt:    expiresAt,
 		CreatedAt:    now,
 	}
@@ -146,6 +150,7 @@ func (s *InstanceAccessService) validateSignedToken(token string) (*AccessToken,
 		InstanceType: claims.InstanceType,
 		TargetPort:   claims.TargetPort,
 		AccessURL:    claims.AccessURL,
+		Upstream:     claims.Upstream,
 		ExpiresAt:    expiresAt,
 		CreatedAt:    createdAt,
 	}, nil

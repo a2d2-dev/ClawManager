@@ -26,6 +26,7 @@ export interface Instance {
   os_version: string;
   image_registry?: string;
   image_tag?: string;
+  desktop_stream_profile?: DesktopStreamProfile;
   storage_class: string;
   mount_path: string;
   workspace_path?: string;
@@ -179,6 +180,7 @@ export interface CreateInstanceRequest {
   mode?: InstanceMode;
   instance_mode?: InstanceMode;
   runtime_type?: "desktop" | "shell" | "gateway";
+  desktop_stream_profile?: DesktopStreamProfile;
   cpu_cores: number;
   memory_gb: number;
   disk_gb: number;
@@ -197,7 +199,10 @@ export interface CreateInstanceRequest {
 export interface UpdateInstanceRequest {
   name?: string;
   description?: string;
+  desktop_stream_profile?: DesktopStreamProfile;
 }
+
+export type DesktopStreamProfile = "low" | "standard" | "high";
 
 export interface InstanceListResponse {
   instances: Instance[];

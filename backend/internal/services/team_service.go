@@ -29,6 +29,7 @@ const (
 
 	defaultTeamTaskStaleTimeout = 30 * time.Minute
 	teamTaskStaleSweepInterval  = 30 * time.Second
+	teamConsumerScanInterval    = 10 * time.Second
 
 	initialLeaderTaskIntent = "team_bootstrap_introduction"
 	teamTaskCompletionTool  = "team_complete_task"
@@ -42,8 +43,8 @@ var (
 )
 
 type TeamService interface {
-	Start()
-	Stop()
+	StartBackground(ctx context.Context)
+	StopBackground()
 	CreateTeam(userID int, req CreateTeamRequest) (*TeamDetailsPayload, error)
 	ListTeams(userID, offset, limit int) (*TeamListPayload, error)
 	GetTeam(userID, teamID int) (*TeamDetailsPayload, error)
@@ -137,6 +138,8 @@ type teamService struct {
 	ctx                  context.Context
 	cancel               context.CancelFunc
 	mu                   sync.Mutex
+	running              bool
+	wg                   sync.WaitGroup
 	consumers            map[int]struct{}
 	staleMonitorStarted  bool
 	runtimeWorkspaceRoot string
@@ -188,20 +191,93 @@ func NewTeamService(repo repository.TeamRepository, instanceService InstanceServ
 	return service
 }
 
-func (s *teamService) Start() {
-	teams, err := s.repo.ListActiveTeams()
-	if err != nil {
-		fmt.Printf("Warning: failed to start Team event consumers: %v\n", err)
+// StartBackground starts the leader-only background workers: a periodic scan
+// that ensures a Redis event consumer is running for every active team, and
+// the stale-task monitor. It is safe to call repeatedly (a second call while
+// running is a no-op) and can be called again after StopBackground, which is
+// required for leader-election re-acquisition. HTTP request handling does not
+// depend on these workers, so followers can still serve the API and the in-pod
+// nginx data plane while only the leader runs them.
+func (s *teamService) StartBackground(parent context.Context) {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
 		return
 	}
-	for _, team := range teams {
-		s.ensureConsumer(team.ID)
+	if parent == nil {
+		parent = context.Background()
 	}
-	s.ensureStaleTaskMonitor()
+	ctx, cancel := context.WithCancel(parent)
+	s.ctx = ctx
+	s.cancel = cancel
+	s.running = true
+	s.staleMonitorStarted = false
+	s.consumers = map[int]struct{}{}
+	s.wg.Add(1)
+	go s.consumerScanLoop(ctx)
+	s.mu.Unlock()
+
+	fmt.Println("[TeamService] Starting leader-only background workers...")
+	s.ensureStaleTaskMonitor(ctx)
 }
 
-func (s *teamService) Stop() {
-	s.cancel()
+// StopBackground stops all background workers and blocks until they have fully
+// exited, so a subsequent StartBackground starts from a clean state with no
+// goroutines from the previous generation still touching shared maps. It is
+// idempotent.
+func (s *teamService) StopBackground() {
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.running = false
+	cancel := s.cancel
+	s.mu.Unlock()
+
+	fmt.Println("[TeamService] Stopping leader-only background workers...")
+	if cancel != nil {
+		cancel()
+	}
+	s.wg.Wait()
+
+	s.mu.Lock()
+	s.consumers = map[int]struct{}{}
+	s.staleMonitorStarted = false
+	s.mu.Unlock()
+}
+
+// consumerScanLoop periodically ensures a consumer goroutine exists for every
+// active team. Team creation no longer starts consumers inline (that would run
+// on whichever replica served the request); the leader picks up newly active
+// teams here within teamConsumerScanInterval.
+func (s *teamService) consumerScanLoop(ctx context.Context) {
+	defer s.wg.Done()
+
+	s.ensureConsumersForActiveTeams(ctx)
+
+	ticker := time.NewTicker(teamConsumerScanInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.ensureConsumersForActiveTeams(ctx)
+		}
+	}
+}
+
+func (s *teamService) ensureConsumersForActiveTeams(ctx context.Context) {
+	teams, err := s.repo.ListActiveTeams()
+	if err != nil {
+		fmt.Printf("Warning: failed to list active teams for consumer scan: %v\n", err)
+		return
+	}
+	for i := range teams {
+		s.ensureConsumer(ctx, teams[i].ID)
+	}
 }
 
 func (s *teamService) CreateTeam(userID int, req CreateTeamRequest) (*TeamDetailsPayload, error) {
@@ -306,8 +382,10 @@ func (s *teamService) CreateTeam(userID int, req CreateTeamRequest) (*TeamDetail
 	if err := s.repo.UpdateTeam(team); err != nil {
 		return nil, err
 	}
-	s.ensureConsumer(team.ID)
-	s.ensureStaleTaskMonitor()
+	// Background consumers / stale-task monitor are leader-only and started by
+	// the leader's periodic scan (consumerScanLoop). Starting them here would
+	// run them on whichever replica served the create request, bypassing
+	// leader election, so we intentionally do not call ensureConsumer here.
 	if err := s.dispatchInitialLeaderTask(userID, team); err != nil {
 		fmt.Printf("Warning: failed to dispatch initial Team %d leader task: %v\n", team.ID, err)
 		if recordErr := s.recordInitialLeaderTaskDispatchFailure(team.ID, err); recordErr != nil {
@@ -962,17 +1040,22 @@ func (s *teamService) requireOwnedTeam(userID, teamID int) (*models.Team, error)
 	return team, nil
 }
 
-func (s *teamService) ensureConsumer(teamID int) {
+func (s *teamService) ensureConsumer(ctx context.Context, teamID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.running {
+		return
+	}
 	if _, exists := s.consumers[teamID]; exists {
 		return
 	}
 	s.consumers[teamID] = struct{}{}
-	go s.consumeTeamEvents(teamID)
+	s.wg.Add(1)
+	go s.consumeTeamEvents(ctx, teamID)
 }
 
-func (s *teamService) consumeTeamEvents(teamID int) {
+func (s *teamService) consumeTeamEvents(ctx context.Context, teamID int) {
+	defer s.wg.Done()
 	defer func() {
 		s.mu.Lock()
 		delete(s.consumers, teamID)
@@ -981,7 +1064,7 @@ func (s *teamService) consumeTeamEvents(teamID int) {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		default:
 		}
@@ -991,7 +1074,7 @@ func (s *teamService) consumeTeamEvents(teamID int) {
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		bus, err := s.redisBusForTeam(s.ctx, team)
+		bus, err := s.redisBusForTeam(ctx, team)
 		if err != nil {
 			time.Sleep(5 * time.Second)
 			continue
@@ -1000,7 +1083,7 @@ func (s *teamService) consumeTeamEvents(teamID int) {
 		if lastID == "" {
 			lastID = "0-0"
 		}
-		messages, err := bus.XRead(s.ctx, teamEventsKey(teamID), lastID, 5*time.Second)
+		messages, err := bus.XRead(ctx, teamEventsKey(teamID), lastID, 5*time.Second)
 		if err != nil {
 			time.Sleep(2 * time.Second)
 			continue
@@ -1016,23 +1099,28 @@ func (s *teamService) consumeTeamEvents(teamID int) {
 	}
 }
 
-func (s *teamService) ensureStaleTaskMonitor() {
+func (s *teamService) ensureStaleTaskMonitor(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.running {
+		return
+	}
 	if s.staleMonitorStarted {
 		return
 	}
 	s.staleMonitorStarted = true
-	go s.monitorStaleTasks()
+	s.wg.Add(1)
+	go s.monitorStaleTasks(ctx)
 }
 
-func (s *teamService) monitorStaleTasks() {
+func (s *teamService) monitorStaleTasks(ctx context.Context) {
+	defer s.wg.Done()
 	ticker := time.NewTicker(teamTaskStaleSweepInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if err := s.sweepStaleTasks(); err != nil {

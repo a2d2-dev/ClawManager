@@ -132,6 +132,8 @@ export const instanceService = {
     access_url: string;
     proxy_url: string;
     expires_at: string;
+    desktop_proxy_mode?: "control-plane" | "fallback" | "direct";
+    desktop_upstream_present?: boolean;
   }> => {
     const response = await api.post(`/instances/${id}/access`);
     return response.data.data;

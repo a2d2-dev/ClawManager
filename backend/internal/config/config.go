@@ -12,14 +12,30 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	Server        ServerConfig        `yaml:"server"`
-	Database      DatabaseConfig      `yaml:"database"`
-	JWT           JWTConfig           `yaml:"jwt"`
-	Kubernetes    KubernetesConfig    `yaml:"kubernetes"`
-	Storage       StorageConfig       `yaml:"storage"`
-	Runtime       RuntimePoolConfig   `yaml:"runtime"`
-	ObjectStorage ObjectStorageConfig `yaml:"objectStorage"`
-	SkillScanner  SkillScannerConfig  `yaml:"skillScanner"`
+	Server         ServerConfig         `yaml:"server"`
+	Database       DatabaseConfig       `yaml:"database"`
+	JWT            JWTConfig            `yaml:"jwt"`
+	Kubernetes     KubernetesConfig     `yaml:"kubernetes"`
+	Storage        StorageConfig        `yaml:"storage"`
+	Runtime        RuntimePoolConfig    `yaml:"runtime"`
+	ObjectStorage  ObjectStorageConfig  `yaml:"objectStorage"`
+	SkillScanner   SkillScannerConfig   `yaml:"skillScanner"`
+	LeaderElection LeaderElectionConfig `yaml:"leaderElection"`
+}
+
+// LeaderElectionConfig controls the control-plane leader election that gates
+// singleton background loops (SyncService + Team event consumers + stale-task
+// monitor) so they run on exactly one replica when clawmanager-app is scaled
+// horizontally. The HTTP API and the in-pod nginx data plane run on every
+// replica regardless.
+type LeaderElectionConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	Namespace     string `yaml:"namespace"`
+	LeaseName     string `yaml:"leaseName"`
+	Identity      string `yaml:"identity"`
+	LeaseDuration int    `yaml:"leaseDuration"` // seconds
+	RenewDeadline int    `yaml:"renewDeadline"` // seconds
+	RetryPeriod   int    `yaml:"retryPeriod"`   // seconds
 }
 
 const (
@@ -289,6 +305,15 @@ func Load() (*Config, error) {
 			TimeoutSeconds: 30,
 			Enabled:        strings.EqualFold(getEnv("SKILL_SCANNER_ENABLED", "false"), "true"),
 		},
+		LeaderElection: LeaderElectionConfig{
+			Enabled:       strings.EqualFold(getEnv("CLAWMANAGER_LEADER_ELECTION", "true"), "true"),
+			Namespace:     getEnv("POD_NAMESPACE", "clawmanager-system"),
+			LeaseName:     getEnv("CLAWMANAGER_LEADER_LEASE_NAME", "clawmanager-controlplane-leader"),
+			Identity:      getEnv("POD_NAME", ""),
+			LeaseDuration: 15,
+			RenewDeadline: 10,
+			RetryPeriod:   2,
+		},
 	}
 
 	// Try to load from k8s config file
@@ -425,6 +450,13 @@ func applyEnvOverrides(config *Config) {
 	config.Runtime.MaxGatewaysPerPod = getEnvInt("RUNTIME_MAX_GATEWAYS_PER_POD", config.Runtime.MaxGatewaysPerPod)
 	config.Runtime.GatewayPortStart = getEnvInt("RUNTIME_GATEWAY_PORT_START", config.Runtime.GatewayPortStart)
 	config.Runtime.GatewayPortEnd = getEnvInt("RUNTIME_GATEWAY_PORT_END", config.Runtime.GatewayPortEnd)
+	config.LeaderElection.Enabled = getEnvBool("CLAWMANAGER_LEADER_ELECTION", config.LeaderElection.Enabled)
+	config.LeaderElection.Namespace = getEnv("POD_NAMESPACE", config.LeaderElection.Namespace)
+	config.LeaderElection.LeaseName = getEnv("CLAWMANAGER_LEADER_LEASE_NAME", config.LeaderElection.LeaseName)
+	config.LeaderElection.Identity = getEnv("POD_NAME", config.LeaderElection.Identity)
+	config.LeaderElection.LeaseDuration = getEnvInt("CLAWMANAGER_LEADER_LEASE_DURATION", config.LeaderElection.LeaseDuration)
+	config.LeaderElection.RenewDeadline = getEnvInt("CLAWMANAGER_LEADER_RENEW_DEADLINE", config.LeaderElection.RenewDeadline)
+	config.LeaderElection.RetryPeriod = getEnvInt("CLAWMANAGER_LEADER_RETRY_PERIOD", config.LeaderElection.RetryPeriod)
 
 	if endpoint := os.Getenv("OBJECT_STORAGE_ENDPOINT"); endpoint != "" {
 		config.ObjectStorage.Endpoint = endpoint

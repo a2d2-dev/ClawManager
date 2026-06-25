@@ -35,6 +35,48 @@ func TestWorkspaceArchiveMaxMiB(t *testing.T) {
 	}
 }
 
+func TestDesktopAccessUpstreamSkipsDirectProxyForRuntimeGateway(t *testing.T) {
+	t.Setenv(desktopDirectProxyEnv, "true")
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name     string
+		instance *models.Instance
+	}{
+		{
+			name: "gateway runtime type",
+			instance: &models.Instance{
+				ID:          50,
+				UserID:      1,
+				Type:        "openclaw",
+				RuntimeType: "gateway",
+			},
+		},
+		{
+			name: "lite instance mode",
+			instance: &models.Instance{
+				ID:           51,
+				UserID:       1,
+				Type:         "openclaw",
+				InstanceMode: services.InstanceModeLite,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/instances/50/access", nil)
+
+			upstream, directEnabled := (&InstanceHandler{}).desktopAccessUpstream(c, tt.instance, 3001)
+			if upstream != "" || directEnabled {
+				t.Fatalf("desktopAccessUpstream() = upstream %q direct %t, want control-plane fallback", upstream, directEnabled)
+			}
+		})
+	}
+}
+
 func TestBuildUserSafeInstanceStatusHidesRuntimeSchedulingDetails(t *testing.T) {
 	podName := "runtime-openclaw-abc"
 	podNamespace := "clawmanager-system"
@@ -189,7 +231,7 @@ func TestProxyAccessTokenPrefersCookieOverRuntimeQueryToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	accessService := services.NewInstanceAccessService()
 	defer accessService.Stop()
-	token, err := accessService.GenerateToken(1, 76, "hermes", "/api/v1/instances/76/proxy/chat/", 3000, time.Hour)
+	token, err := accessService.GenerateToken(1, 76, "hermes", "/api/v1/instances/76/proxy/chat/", "", 3000, time.Hour)
 	if err != nil {
 		t.Fatalf("GenerateToken returned error: %v", err)
 	}

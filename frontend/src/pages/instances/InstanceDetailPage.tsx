@@ -40,11 +40,21 @@ import type {
   InstanceRuntimeCommand,
   InstanceRuntimeDetails,
   InstanceStatus,
+  DesktopStreamProfile,
 } from "../../types/instance";
 import type { InstanceSkill, Skill } from "../../types/skill";
 
 const META_POLL_INTERVAL_MS = 5000;
 const RUNTIME_POLL_INTERVAL_MS = 5000;
+const DESKTOP_STREAM_PROFILES: Array<{
+  id: DesktopStreamProfile;
+  labelKey: string;
+  detail: string;
+}> = [
+  { id: "low", labelKey: "instances.desktopStreamLow", detail: "30 FPS / CRF 42" },
+  { id: "standard", labelKey: "instances.desktopStreamStandard", detail: "35 FPS / CRF 34" },
+  { id: "high", labelKey: "instances.desktopStreamHigh", detail: "40 FPS / CRF 24" },
+];
 
 function availabilityForStatus(status: string): InstanceAvailability {
   if (status === "running") {
@@ -304,6 +314,11 @@ const InstanceDetailPage: React.FC = () => {
   const [selectedSkillId, setSelectedSkillId] = useState<number | "">("");
   const [skillLoading, setSkillLoading] = useState(false);
   const [skillError, setSkillError] = useState<string | null>(null);
+  const [desktopStreamProfile, setDesktopStreamProfile] =
+    useState<DesktopStreamProfile>("standard");
+  const [desktopStreamSavedProfile, setDesktopStreamSavedProfile] =
+    useState<DesktopStreamProfile | "">("");
+  const [desktopStreamMessage, setDesktopStreamMessage] = useState<string | null>(null);
 
   const fetchMeta = useCallback(
     async (targetInstanceId: number, options?: { background?: boolean }) => {
@@ -378,6 +393,13 @@ const InstanceDetailPage: React.FC = () => {
       setSkillLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const savedProfile = instance?.desktop_stream_profile || "";
+    setDesktopStreamProfile(savedProfile || "standard");
+    setDesktopStreamSavedProfile(savedProfile);
+    setDesktopStreamMessage(null);
+  }, [instance?.desktop_stream_profile, instance?.id]);
 
   useEffect(() => {
     if (!instanceId || Number.isNaN(instanceId)) {
@@ -559,6 +581,31 @@ const InstanceDetailPage: React.FC = () => {
       setExternalAccessPanelOpen(true);
     } finally {
       setExternalActionLoading(null);
+    }
+  };
+
+  const handleSaveDesktopStreamProfile = async () => {
+    if (!instance || desktopStreamProfile === desktopStreamSavedProfile) {
+      return;
+    }
+
+    try {
+      setActionLoading("desktop-stream-profile");
+      setDesktopStreamMessage(null);
+      await instanceService.updateInstance(instance.id, {
+        desktop_stream_profile: desktopStreamProfile,
+      });
+      const updatedInstance = await instanceService.getInstance(instance.id);
+      setInstance(updatedInstance);
+      const savedProfile = updatedInstance.desktop_stream_profile || desktopStreamProfile;
+      setDesktopStreamSavedProfile(savedProfile);
+      setDesktopStreamProfile(savedProfile);
+      setDesktopStreamMessage(t("instances.desktopStreamSavedRestartRequired"));
+    } catch (streamError) {
+      console.error("Failed to update desktop stream profile", streamError);
+      setDesktopStreamMessage(t("instances.desktopStreamSaveFailed"));
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -982,6 +1029,55 @@ const InstanceDetailPage: React.FC = () => {
           </div>
         )}
       </section>
+
+      {(instance.runtime_type || "desktop") === "desktop" && (
+        <section className="cm-surface px-4 py-4">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-950">
+                {t("instances.desktopStreamProfile")}
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                {t("instances.desktopStreamProfileDesc")}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleSaveDesktopStreamProfile}
+              disabled={
+                actionLoading === "desktop-stream-profile" ||
+                desktopStreamProfile === desktopStreamSavedProfile
+              }
+              className="app-button-secondary shrink-0 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {actionLoading === "desktop-stream-profile" ? t("common.saving") : t("common.save")}
+            </button>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {DESKTOP_STREAM_PROFILES.map((profile) => {
+              const selected = desktopStreamProfile === profile.id;
+              return (
+                <button
+                  key={profile.id}
+                  type="button"
+                  onClick={() => setDesktopStreamProfile(profile.id)}
+                  className={`min-h-[82px] rounded-md border px-3 py-2 text-left transition ${
+                    selected
+                      ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-100"
+                      : "border-slate-200 bg-white hover:border-indigo-200"
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-slate-950">{t(profile.labelKey)}</div>
+                  <div className="mt-2 font-mono text-xs text-slate-500">{profile.detail}</div>
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-3 text-xs text-slate-500">
+            {desktopStreamMessage || t("instances.restartRequiredAfterChange")}
+          </p>
+        </section>
+      )}
 
       <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,22rem)]">
         <section className="cm-surface px-4 py-4">

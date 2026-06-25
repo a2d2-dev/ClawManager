@@ -25,6 +25,7 @@ type Instance struct {
 	ImageRegistry            *string    `db:"image_registry" json:"image_registry,omitempty"`
 	ImageTag                 *string    `db:"image_tag" json:"image_tag,omitempty"`
 	EnvironmentOverridesJSON *string    `db:"environment_overrides_json" json:"-"`
+	DesktopStreamProfile     string     `db:"-" json:"desktop_stream_profile,omitempty"`
 	StorageClass             string     `db:"storage_class" json:"storage_class"`
 	MountPath                string     `db:"mount_path" json:"mount_path"`
 	WorkspacePath            *string    `db:"workspace_path" json:"workspace_path,omitempty"`

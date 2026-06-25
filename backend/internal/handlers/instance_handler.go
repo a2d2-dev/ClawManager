@@ -30,6 +30,80 @@ const (
 	workspaceArchiveMaxMiBEnv     = "CLAWMANAGER_WORKSPACE_ARCHIVE_MAX_MIB"
 )
 
+// desktopDirectProxyEnv toggles embedding the instance Service "host:port" into
+// the access token so the edge gateway can proxy desktop traffic directly to the
+// instance instead of relaying it through this control-plane process.
+const desktopDirectProxyEnv = "CLAWMANAGER_DESKTOP_DIRECT_PROXY"
+
+// desktopDirectProxyEnabled reports whether direct desktop proxying is enabled.
+func desktopDirectProxyEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(desktopDirectProxyEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func desktopProxyMode(directEnabled bool, upstream string) string {
+	if !directEnabled {
+		return "control-plane"
+	}
+	if strings.TrimSpace(upstream) == "" {
+		return "fallback"
+	}
+	return "direct"
+}
+
+func (h *InstanceHandler) desktopAccessUpstream(c *gin.Context, instance *models.Instance, targetPort int32) (string, bool) {
+	directProxyEnabled := desktopDirectProxyEnabled()
+	if !directProxyEnabled {
+		return "", false
+	}
+	if usesRuntimeGateway(instance) {
+		return "", false
+	}
+	if !h.proxyService.IsWebtopInstanceType(instance.Type) {
+		fmt.Printf("Desktop direct proxy fallback: unsupported desktop instance type instance=%d user=%d type=%s target_port=%d\n",
+			instance.ID, instance.UserID, instance.Type, targetPort)
+		return "", true
+	}
+
+	resolved, resolveErr := h.proxyService.ResolveUpstreamHostPort(
+		c.Request.Context(),
+		instance.UserID,
+		instance.ID,
+		targetPort,
+	)
+	if resolveErr != nil {
+		fmt.Printf("Desktop direct proxy fallback: failed to resolve upstream instance=%d user=%d type=%s target_port=%d error=%v\n",
+			instance.ID, instance.UserID, instance.Type, targetPort, resolveErr)
+		return "", true
+	}
+	if strings.TrimSpace(resolved) == "" {
+		fmt.Printf("Desktop direct proxy fallback: resolved empty upstream instance=%d user=%d type=%s target_port=%d\n",
+			instance.ID, instance.UserID, instance.Type, targetPort)
+		return "", true
+	}
+
+	fmt.Printf("Desktop direct proxy resolved: instance=%d user=%d type=%s target_port=%d upstream=%s\n",
+		instance.ID, instance.UserID, instance.Type, targetPort, resolved)
+	return resolved, true
+}
+
+func usesRuntimeGateway(instance *models.Instance) bool {
+	if instance == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(instance.RuntimeType), services.RuntimeBackendGateway) {
+		return true
+	}
+	if mode, ok := services.NormalizeInstanceMode(instance.InstanceMode); ok && mode == services.InstanceModeLite {
+		return true
+	}
+	return false
+}
+
 func workspaceArchiveMaxMiB() int64 {
 	value := strings.TrimSpace(os.Getenv(workspaceArchiveMaxMiBEnv))
 	if value == "" {
@@ -112,10 +186,11 @@ type ExternalAccessRequest struct {
 type CreateInstanceRequest struct {
 	Name                 string                       `json:"name" binding:"required,min=3,max=50"`
 	Description          *string                      `json:"description,omitempty"`
-	Type                 string                       `json:"type" binding:"required,oneof=openclaw hermes"`
+	Type                 string                       `json:"type" binding:"required,oneof=openclaw ubuntu debian centos custom webtop hermes"`
 	Mode                 string                       `json:"mode" binding:"omitempty,oneof=lite pro"`
 	InstanceMode         string                       `json:"instance_mode" binding:"omitempty,oneof=lite pro"`
 	RuntimeType          string                       `json:"runtime_type" binding:"omitempty,oneof=gateway desktop shell"`
+	DesktopStreamProfile string                       `json:"desktop_stream_profile,omitempty" binding:"omitempty,oneof=low standard high"`
 	CPUCores             float64                      `json:"cpu_cores" binding:"required,min=0.1,max=32"`
 	MemoryGB             int                          `json:"memory_gb" binding:"required,min=1,max=128"`
 	DiskGB               int                          `json:"disk_gb" binding:"required,min=10,max=1000"`
@@ -133,8 +208,9 @@ type CreateInstanceRequest struct {
 
 // UpdateInstanceRequest represents an update instance request
 type UpdateInstanceRequest struct {
-	Name        *string `json:"name,omitempty" binding:"omitempty,min=3,max=50"`
-	Description *string `json:"description,omitempty"`
+	Name                 *string `json:"name,omitempty" binding:"omitempty,min=3,max=50"`
+	Description          *string `json:"description,omitempty"`
+	DesktopStreamProfile *string `json:"desktop_stream_profile,omitempty" binding:"omitempty,oneof=low standard high"`
 }
 
 // ListInstancesRequest represents a list instances request
@@ -225,6 +301,7 @@ func (h *InstanceHandler) CreateInstance(c *gin.Context) {
 		Mode:                 req.Mode,
 		InstanceMode:         req.InstanceMode,
 		RuntimeType:          req.RuntimeType,
+		DesktopStreamProfile: req.DesktopStreamProfile,
 		CPUCores:             req.CPUCores,
 		MemoryGB:             req.MemoryGB,
 		DiskGB:               req.DiskGB,
@@ -369,8 +446,9 @@ func (h *InstanceHandler) UpdateInstance(c *gin.Context) {
 	}
 
 	updateReq := services.UpdateInstanceRequest{
-		Name:        req.Name,
-		Description: req.Description,
+		Name:                 req.Name,
+		Description:          req.Description,
+		DesktopStreamProfile: req.DesktopStreamProfile,
 	}
 
 	if err := h.instanceService.Update(id, updateReq); err != nil {
@@ -845,6 +923,14 @@ func (h *InstanceHandler) GenerateAccessToken(c *gin.Context) {
 		return
 	}
 
+	targetPort := h.proxyService.GetTargetPortForInstance(instance)
+
+	// When direct desktop proxying is enabled, embed the instance Service
+	// "host:port" into the token so the edge gateway can dial the instance
+	// directly. On any failure we fall back to an empty upstream, which keeps
+	// the request flowing through the in-process control-plane proxy.
+	upstream, directProxyEnabled := h.desktopAccessUpstream(c, instance, targetPort)
+
 	// Generate access token (valid for 1 hour)
 	maxAgeSeconds := int(time.Hour.Seconds())
 	token, err := h.accessService.GenerateToken(
@@ -852,7 +938,8 @@ func (h *InstanceHandler) GenerateAccessToken(c *gin.Context) {
 		instance.ID,
 		instance.Type,
 		accessURL,
-		h.proxyService.GetTargetPortForInstance(instance),
+		upstream,
+		targetPort,
 		1*time.Hour,
 	)
 	if err != nil {
@@ -874,10 +961,12 @@ func (h *InstanceHandler) GenerateAccessToken(c *gin.Context) {
 
 	// Return token and URLs
 	response := map[string]interface{}{
-		"token":      token.Token,
-		"access_url": accessURL,
-		"proxy_url":  h.proxyService.GetProxyURLForInstance(instance, token.Token),
-		"expires_at": token.ExpiresAt,
+		"token":                    token.Token,
+		"access_url":               accessURL,
+		"proxy_url":                h.proxyService.GetProxyURLForInstance(instance, token.Token),
+		"expires_at":               token.ExpiresAt,
+		"desktop_proxy_mode":       desktopProxyMode(directProxyEnabled, upstream),
+		"desktop_upstream_present": upstream != "",
 	}
 
 	utils.Success(c, http.StatusOK, "Access token generated successfully", response)
@@ -1540,12 +1629,15 @@ func (h *InstanceHandler) issueShortExternalAccessToken(c *gin.Context, instance
 		utils.Error(c, http.StatusServiceUnavailable, "Unable to generate access URL")
 		return nil, false
 	}
+	targetPort := h.proxyService.GetTargetPortForInstance(instance)
+	upstream, _ := h.desktopAccessUpstream(c, instance, targetPort)
 	instanceToken, err := h.accessService.GenerateToken(
 		instance.UserID,
 		instance.ID,
 		instance.Type,
 		accessURL,
-		h.proxyService.GetTargetPortForInstance(instance),
+		upstream,
+		targetPort,
 		1*time.Hour,
 	)
 	if err != nil {

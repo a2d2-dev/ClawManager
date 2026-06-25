@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"clawreef/internal/repository"
 	"clawreef/internal/services"
 	"clawreef/internal/services/k8s"
+	"clawreef/internal/services/leader"
 
 	"github.com/gin-gonic/gin"
 )
@@ -177,18 +179,21 @@ func main() {
 		services.StartRuntimeAdminEventBridge(bridgeCtx, runtimeEvents, wsHub)
 	}
 
-	// Start sync service to keep instance status in sync with K8s
+	// Control-plane singleton background loops. The HTTP API and the in-pod
+	// nginx desktop data plane run on every replica, but these loops must run
+	// on exactly one replica. With leader election enabled they only run on the
+	// elected leader and migrate on failover; with it disabled (single-replica
+	// deployments) they run directly.
 	syncService := services.NewSyncService(instanceRepo, instanceRuntimeStatusService)
-	syncService.Start()
-	teamService.Start()
 	var runtimeSchedulerCancel context.CancelFunc
+	var runtimeSchedulerMu sync.Mutex
 	var runtimeScheduler *services.RuntimeScheduler
 	if cfg.Runtime.SchedulerEnabled {
 		k8sClient := k8s.GetClient()
 		if k8sClient == nil || k8sClient.Clientset == nil {
 			log.Printf("runtime scheduler disabled: k8s client is unavailable")
 		} else {
-			leader := services.NewRuntimeLeaderService(k8sClient.Clientset, cfg.Runtime.Namespace, cfg.Runtime.BackendReplicaID)
+			runtimeLeader := services.NewRuntimeLeaderService(k8sClient.Clientset, cfg.Runtime.Namespace, cfg.Runtime.BackendReplicaID)
 			runtimeDeployments := k8s.NewRuntimeDeploymentService(k8sClient.Clientset)
 			runtimeSchedulerOptions := []services.RuntimeSchedulerOption{
 				services.WithRuntimeSchedulerWorkspaceRoot(cfg.Runtime.WorkspaceRoot),
@@ -209,20 +214,64 @@ func main() {
 				rolloutRepo,
 				runtimeAgentClient,
 				runtimeEvents,
-				leader,
+				runtimeLeader,
 				runtimeDeployments,
 				cfg.Runtime.SchedulerTick,
 				runtimeSchedulerOptions...,
 			)
-			var schedulerCtx context.Context
-			schedulerCtx, runtimeSchedulerCancel = context.WithCancel(context.Background())
-			runtimeScheduler.Start(schedulerCtx)
-			log.Printf("runtime scheduler started")
+			log.Printf("runtime scheduler initialized")
 		}
 	} else {
 		log.Printf("runtime scheduler disabled by configuration")
 	}
 	runtimePoolHandler := handlers.NewRuntimePoolHandler(runtimePodRepo, bindingRepo, rolloutRepo, runtimeScheduler, runtimeEvents)
+
+	leaderCtx, leaderCancel := context.WithCancel(context.Background())
+	defer leaderCancel()
+
+	startBackground := func(ctx context.Context) {
+		log.Printf("Starting leader-only background loops (identity=%s)", cfg.LeaderElection.Identity)
+		syncService.Start()
+		teamService.StartBackground(ctx)
+		if runtimeScheduler != nil {
+			runtimeSchedulerMu.Lock()
+			if runtimeSchedulerCancel == nil {
+				var schedulerCtx context.Context
+				schedulerCtx, runtimeSchedulerCancel = context.WithCancel(ctx)
+				runtimeScheduler.Start(schedulerCtx)
+				log.Printf("runtime scheduler started")
+			}
+			runtimeSchedulerMu.Unlock()
+		}
+	}
+	stopBackground := func() {
+		log.Printf("Stopping leader-only background loops (identity=%s)", cfg.LeaderElection.Identity)
+		runtimeSchedulerMu.Lock()
+		if runtimeSchedulerCancel != nil {
+			runtimeSchedulerCancel()
+			runtimeSchedulerCancel = nil
+		}
+		runtimeSchedulerMu.Unlock()
+		teamService.StopBackground()
+		syncService.Stop()
+	}
+
+	if cfg.LeaderElection.Enabled && k8s.GetClient() != nil && k8s.GetClient().Clientset != nil {
+		go leader.Run(leaderCtx, k8s.GetClient().Clientset, leader.Config{
+			Namespace:     cfg.LeaderElection.Namespace,
+			LeaseName:     cfg.LeaderElection.LeaseName,
+			Identity:      cfg.LeaderElection.Identity,
+			LeaseDuration: time.Duration(cfg.LeaderElection.LeaseDuration) * time.Second,
+			RenewDeadline: time.Duration(cfg.LeaderElection.RenewDeadline) * time.Second,
+			RetryPeriod:   time.Duration(cfg.LeaderElection.RetryPeriod) * time.Second,
+		}, leader.Callbacks{
+			OnStartedLeading: startBackground,
+			OnStoppedLeading: stopBackground,
+		})
+	} else {
+		log.Println("Leader election disabled or K8s unavailable; running control-plane background loops directly")
+		startBackground(leaderCtx)
+	}
 
 	// Setup router
 	r := gin.Default()
@@ -540,15 +589,14 @@ func main() {
 		log.Printf("HTTP server forced to shutdown: %v", err)
 	}
 
-	// Stop background services
-	if runtimeSchedulerCancel != nil {
-		runtimeSchedulerCancel()
-	}
+	// Stop background services. Cancelling leaderCtx releases the lease (and,
+	// if we were leader, triggers stopBackground); the explicit stopBackground
+	// call is idempotent and covers the leader-election-disabled path.
+	leaderCancel()
+	stopBackground()
 	if runtimeAdminEventBridgeCancel != nil {
 		runtimeAdminEventBridgeCancel()
 	}
-	syncService.Stop()
-	teamService.Stop()
 	wsHub.Stop()
 	instanceHandler.Shutdown()
 
