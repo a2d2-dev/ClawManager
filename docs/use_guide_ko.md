@@ -40,7 +40,7 @@
 어떤 방식을 사용하든 최종적으로 동일한 ClawManager 매니페스트를 적용합니다:
 
 ```bash
-kubectl apply -f deployments/k8s/clawmanager.yaml
+kubectl apply -f deployments/k8s/cluster/clawmanager.yaml
 ```
 
 ---
@@ -170,7 +170,7 @@ cd ClawManager
 저장소 루트 디렉터리에서 실행합니다:
 
 ```bash
-kubectl apply -f deployments/k8s/clawmanager.yaml
+kubectl apply -f deployments/k8s/cluster/clawmanager.yaml
 ```
 
 ### 6.3 기본 리소스 확인

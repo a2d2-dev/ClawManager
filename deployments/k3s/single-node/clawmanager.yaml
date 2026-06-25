@@ -1,3 +1,8 @@
+# ClawManager single-node install profile.
+# Official validation target: HostPath on one labeled storage node.
+# Before installing, label exactly one node:
+#   kubectl label node <node> clawmanager.io/storage-node=true --overwrite
+# Replace paths or StorageClass names only if you understand the single-node constraints.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -716,6 +721,11 @@ apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: clawmanager-mysql-pv
+  labels:
+    app: clawmanager
+    managed-by: clawmanager
+    clawmanager.io/storage-profile: single-node
+    clawmanager.io/storage-node: "true"
 spec:
   capacity:
     storage: 5Gi
@@ -724,6 +734,14 @@ spec:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
   storageClassName: manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: clawmanager.io/storage-node
+              operator: In
+              values:
+                - "true"
   hostPath:
     path: /data/clawmanager/system/mysql
     type: DirectoryOrCreate
@@ -746,6 +764,11 @@ apiVersion: v1
 kind: PersistentVolume
 metadata:
   name: clawmanager-minio-pv
+  labels:
+    app: clawmanager
+    managed-by: clawmanager
+    clawmanager.io/storage-profile: single-node
+    clawmanager.io/storage-node: "true"
 spec:
   capacity:
     storage: 10Gi
@@ -754,6 +777,14 @@ spec:
     - ReadWriteOnce
   persistentVolumeReclaimPolicy: Retain
   storageClassName: manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: clawmanager.io/storage-node
+              operator: In
+              values:
+                - "true"
   hostPath:
     path: /data/clawmanager/system/minio
     type: DirectoryOrCreate
@@ -771,6 +802,92 @@ spec:
       storage: 10Gi
   storageClassName: manual
   volumeName: clawmanager-minio-pv
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: clawmanager-redis-pv
+  labels:
+    app: clawmanager
+    managed-by: clawmanager
+    clawmanager.io/storage-profile: single-node
+    clawmanager.io/storage-node: "true"
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: clawmanager.io/storage-node
+              operator: In
+              values:
+                - "true"
+  hostPath:
+    path: /data/clawmanager/system/redis
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: clawmanager-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: manual
+  volumeName: clawmanager-redis-pv
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: clawmanager-workspaces-pv
+  labels:
+    app: clawmanager
+    managed-by: clawmanager
+    clawmanager.io/storage-profile: single-node
+    clawmanager.io/storage-node: "true"
+spec:
+  capacity:
+    storage: 50Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: clawmanager.io/storage-node
+              operator: In
+              values:
+                - "true"
+  hostPath:
+    path: /data/clawmanager/system/workspaces
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: clawmanager-workspaces
+  namespace: clawmanager-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: manual
+  volumeName: clawmanager-workspaces-pv
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -791,6 +908,8 @@ spec:
         - name: mysql
           image: mysql:8.4.8
           imagePullPolicy: IfNotPresent
+          args:
+            - "--innodb-use-native-aio=0"
           ports:
             - containerPort: 3306
           env:
@@ -944,7 +1063,8 @@ spec:
               mountPath: /data
       volumes:
         - name: redis-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: redis-data
 ---
 apiVersion: v1
 kind: Service
@@ -971,84 +1091,6 @@ spec:
     - name: redis
       port: 6379
       targetPort: redis
----
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: clawmanager-workspaces-pv
-spec:
-  capacity:
-    storage: 50Gi
-  volumeMode: Filesystem
-  accessModes:
-    - ReadWriteMany
-  persistentVolumeReclaimPolicy: Retain
-  storageClassName: manual
-  hostPath:
-    path: /data/clawmanager/system/workspaces
-    type: DirectoryOrCreate
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: clawmanager-workspaces
-  namespace: clawmanager-system
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 50Gi
-  storageClassName: manual
-  volumeName: clawmanager-workspaces-pv
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: workspace-store
-  namespace: clawmanager-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: workspace-store
-  template:
-    metadata:
-      labels:
-        app: workspace-store
-    spec:
-      containers:
-        - name: nfs-server
-          image: itsthenetwork/nfs-server-alpine:12
-          imagePullPolicy: IfNotPresent
-          securityContext:
-            privileged: true
-          env:
-            - name: SHARED_DIRECTORY
-              value: /exports/workspaces
-          ports:
-            - name: nfs
-              containerPort: 2049
-          volumeMounts:
-            - name: workspaces
-              mountPath: /exports/workspaces
-      volumes:
-        - name: workspaces
-          persistentVolumeClaim:
-            claimName: clawmanager-workspaces
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: workspace-store
-  namespace: clawmanager-system
-spec:
-  selector:
-    app: workspace-store
-  ports:
-    - name: nfs
-      port: 2049
-      targetPort: nfs
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -1177,7 +1219,7 @@ metadata:
   name: clawmanager-app
   namespace: clawmanager-system
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: clawmanager-app
@@ -1247,6 +1289,20 @@ spec:
               value: "clawmanager"
             - name: K8S_STORAGE_CLASS
               value: "manual"
+            - name: CLAWMANAGER_STORAGE_PROFILE
+              value: "single-node"
+            - name: K8S_HOSTPATH_FALLBACK_ENABLED
+              value: "true"
+            - name: K8S_PVC_BIND_TIMEOUT
+              value: "2m"
+            - name: K8S_CONTROL_PLANE_STORAGE_CLASS
+              value: "manual"
+            - name: K8S_INSTANCE_STORAGE_CLASS
+              value: "manual"
+            - name: K8S_WORKSPACE_STORAGE_CLASS
+              value: "manual"
+            - name: K8S_WORKSPACE_ACCESS_MODE
+              value: "ReadWriteMany"
             - name: K8S_PV_HOST_PATH_PREFIX
               value: "/data/clawreef"
             - name: CLAWMANAGER_WORKSPACE_ARCHIVE_MAX_MIB
@@ -1263,10 +1319,8 @@ spec:
               value: "clawmanager-system"
             - name: RUNTIME_WORKSPACE_ROOT
               value: "/workspaces"
-            - name: RUNTIME_WORKSPACE_NFS_SERVER
-              value: "workspace-store.clawmanager-system.svc.cluster.local"
-            - name: RUNTIME_WORKSPACE_NFS_PATH
-              value: "/"
+            - name: RUNTIME_WORKSPACE_PVC_CLAIM
+              value: "clawmanager-workspaces"
             - name: RUNTIME_MAX_GATEWAYS_PER_POD
               value: "100"
             - name: RUNTIME_GATEWAY_PORT_START
@@ -1328,9 +1382,8 @@ spec:
             secretName: clawmanager-tls
             optional: true
         - name: workspaces
-          nfs:
-            server: workspace-store.clawmanager-system.svc.cluster.local
-            path: /exports/workspaces
+          persistentVolumeClaim:
+            claimName: clawmanager-workspaces
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -1416,9 +1469,8 @@ spec:
               mountPath: /workspaces
       volumes:
         - name: workspaces
-          nfs:
-            server: workspace-store.clawmanager-system.svc.cluster.local
-            path: /exports/workspaces
+          persistentVolumeClaim:
+            claimName: clawmanager-workspaces
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -1515,9 +1567,8 @@ spec:
               mountPath: /workspaces
       volumes:
         - name: workspaces
-          nfs:
-            server: workspace-store.clawmanager-system.svc.cluster.local
-            path: /exports/workspaces
+          persistentVolumeClaim:
+            claimName: clawmanager-workspaces
 ---
 apiVersion: v1
 kind: Service
@@ -1532,7 +1583,7 @@ spec:
     - name: https
       port: 443
       targetPort: https
-      nodePort: 39443
+      nodePort: 30443
 ---
 apiVersion: v1
 kind: Service

@@ -56,6 +56,10 @@ Thumbs.db
 *.tmp
 *.temp
 /test_*
+/deploy/
+/test.tar
+/fix-install-plan.md
+/docs/deployment-storage-remediation-plan.zh-CN.md
 
 
 .codex-logs/

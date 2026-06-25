@@ -74,6 +74,33 @@ func TestBuildRuntimeDeployment(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeDeploymentUsesWorkspacePVCWhenClaimConfigured(t *testing.T) {
+	deployment := BuildRuntimeDeployment(RuntimeDeploymentSpec{
+		Name:                  "runtime-openclaw",
+		Namespace:             "runtime-system",
+		RuntimeType:           "openclaw",
+		Image:                 "registry/openclaw:latest",
+		Replicas:              2,
+		WorkspacePVCClaimName: "clawmanager-workspaces",
+		WorkspaceNFSServer:    "workspace-store.clawmanager-system.svc.cluster.local",
+		WorkspaceNFSPath:      "/exports/workspaces",
+	})
+
+	if len(deployment.Spec.Template.Spec.Volumes) != 1 {
+		t.Fatalf("expected one volume, got %#v", deployment.Spec.Template.Spec.Volumes)
+	}
+	volume := deployment.Spec.Template.Spec.Volumes[0]
+	if volume.Name != "workspaces" || volume.PersistentVolumeClaim == nil {
+		t.Fatalf("expected workspaces PVC volume, got %#v", volume)
+	}
+	if got, want := volume.PersistentVolumeClaim.ClaimName, "clawmanager-workspaces"; got != want {
+		t.Fatalf("PVC claim name = %q, want %q", got, want)
+	}
+	if volume.NFS != nil {
+		t.Fatalf("PVC workspace volume must not also include NFS source: %#v", volume.NFS)
+	}
+}
+
 func TestBuildRuntimeDeploymentKeepsCapacityLimitOutOfRuntimeEnv(t *testing.T) {
 	deployment := BuildRuntimeDeployment(RuntimeDeploymentSpec{
 		Name:               "runtime-openclaw",

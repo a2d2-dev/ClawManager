@@ -30,20 +30,21 @@ const (
 )
 
 type RuntimeDeploymentSpec struct {
-	Name               string
-	Namespace          string
-	RuntimeType        string
-	Image              string
-	Replicas           int32
-	WorkspaceNFSServer string
-	WorkspaceNFSPath   string
-	WorkspaceMountPath string
-	GatewayPortStart   int
-	GatewayPortEnd     int
-	AgentControlToken  string
-	AgentReportToken   string
-	BackendURL         string
-	TrustedProxyCIDRs  string
+	Name                  string
+	Namespace             string
+	RuntimeType           string
+	Image                 string
+	Replicas              int32
+	WorkspacePVCClaimName string
+	WorkspaceNFSServer    string
+	WorkspaceNFSPath      string
+	WorkspaceMountPath    string
+	GatewayPortStart      int
+	GatewayPortEnd        int
+	AgentControlToken     string
+	AgentReportToken      string
+	BackendURL            string
+	TrustedProxyCIDRs     string
 }
 
 type RuntimeDeploymentPod struct {
@@ -126,19 +127,37 @@ func BuildRuntimeDeployment(spec RuntimeDeploymentSpec) *appsv1.Deployment {
 					},
 					Volumes: []corev1.Volume{
 						{
-							Name: runtimeWorkspaceVolume,
-							VolumeSource: corev1.VolumeSource{
-								NFS: &corev1.NFSVolumeSource{
-									Server: spec.WorkspaceNFSServer,
-									Path:   spec.WorkspaceNFSPath,
-								},
-							},
+							Name:         runtimeWorkspaceVolume,
+							VolumeSource: runtimeWorkspaceVolumeSource(spec),
 						},
 					},
 				},
 			},
 		},
 	}
+}
+
+func runtimeWorkspaceVolumeSource(spec RuntimeDeploymentSpec) corev1.VolumeSource {
+	if claimName := strings.TrimSpace(spec.WorkspacePVCClaimName); claimName != "" {
+		return corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: claimName,
+			},
+		}
+	}
+	if server := strings.TrimSpace(spec.WorkspaceNFSServer); server != "" {
+		nfsPath := strings.TrimSpace(spec.WorkspaceNFSPath)
+		if nfsPath == "" {
+			nfsPath = "/"
+		}
+		return corev1.VolumeSource{
+			NFS: &corev1.NFSVolumeSource{
+				Server: server,
+				Path:   nfsPath,
+			},
+		}
+	}
+	return corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}
 }
 
 func buildRuntimeAgentEnv(spec RuntimeDeploymentSpec, workspaceRoot string, gatewayPortStart, gatewayPortEnd int) []corev1.EnvVar {

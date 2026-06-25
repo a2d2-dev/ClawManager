@@ -126,12 +126,16 @@ Runtime 开发方可以参考 [Hermes Runtime Guide](./docs/hermes-runtime-agent
 <a id="get-started"></a>
 ## 快速开始
 
-ClawManager 现在同时提供标准 Kubernetes 与轻量级集群的清晰入口。如果你想快速评估产品，可以先从匹配你环境的部署路径开始，再进入首次登录与上手流程。
+ClawManager 现在将 Kubernetes 发行版与存储 profile 拆开。先选择 `k3s` 或 `k8s`，再选择匹配集群形态的存储 profile：
 
-- 标准 Kubernetes 部署: [deployments/k8s/clawmanager.yaml](./deployments/k8s/clawmanager.yaml)
-- K3s / 轻量集群部署: [deployments/k3s/clawmanager.yaml](./deployments/k3s/clawmanager.yaml)
+- k3s 单节点 HostPath: [deployments/k3s/single-node/clawmanager.yaml](./deployments/k3s/single-node/clawmanager.yaml)
+- k3s 多节点 CSI/RWX 示例: [deployments/k3s/cluster/clawmanager.yaml](./deployments/k3s/cluster/clawmanager.yaml)
+- Kubernetes 单节点 HostPath: [deployments/k8s/single-node/clawmanager.yaml](./deployments/k8s/single-node/clawmanager.yaml)
+- Kubernetes 多节点 CSI/RWX 示例: [deployments/k8s/cluster/clawmanager.yaml](./deployments/k8s/cluster/clawmanager.yaml)
 - 首次登录与操作流程: [用户指南](./docs/use_guide_cn.md)
 - 部署说明与架构背景: [Deployment Guide（英文）](./docs/deployment.md)
+
+多节点 cluster profile 使用 Longhorn 作为官方验证示例，其中 `longhorn` 用于 RWO 数据卷，`longhorn-rwx` 用于 RWX workspace。项目不绑定 Longhorn，用户可以替换为具备相同访问模式能力的 CSI StorageClass。
 
 ## 三大控制平面
 

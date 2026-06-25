@@ -29,18 +29,22 @@
 
 <a id="sec-02"></a>
 ## II. Deployment Options Overview
-You can deploy using either of the following methods:
+Choose a Kubernetes distribution and a storage profile:
 
-### Option A: k3s deployment
-Suitable for single-node, test, or lightweight production environments.
+- `k3s/single-node`: HostPath validation path for one labeled node.
+- `k3s/cluster`: multi-node CSI/RWX path, validated with Longhorn examples.
+- `k8s/single-node`: HostPath validation path for one labeled node.
+- `k8s/cluster`: multi-node CSI/RWX path, validated with Longhorn examples.
 
-### Option B: standard Kubernetes deployment
-Suitable for server environments that already have a standard Kubernetes cluster.
+Longhorn is the official cluster validation example, not a hard dependency. You may replace `longhorn` and `longhorn-rwx` with StorageClasses from another CSI provider if they provide the same RWO/RWX behavior.
 
-No matter which method you use, you will ultimately apply the same ClawManager manifest:
+Recommended manifests:
 
 ```bash
-kubectl apply -f deployments/k8s/clawmanager.yaml
+deployments/k3s/single-node/clawmanager.yaml
+deployments/k3s/cluster/clawmanager.yaml
+deployments/k8s/single-node/clawmanager.yaml
+deployments/k8s/cluster/clawmanager.yaml
 ```
 
 ---
@@ -104,19 +108,19 @@ kubectl get ns
 
 Normally, you should see at least one `Ready` node.
 
-### 4.2 Check the default StorageClass
-MySQL and MinIO in ClawManager require persistent storage. It is recommended to first check whether the cluster has a default `StorageClass`:
+### 4.2 Check StorageClass capabilities
+MySQL, Redis, MinIO, workspaces, and runtime PVCs require persistent storage. For the cluster profile, prepare one RWO StorageClass and one RWX workspace StorageClass:
 
 ```bash
 kubectl get storageclass
 ```
 
-If the cluster already has a default storage class, you can continue with deployment directly.
+The bundled cluster manifests use `longhorn` for RWO volumes and `longhorn-rwx` for RWX workspaces. Replace those names if your cluster uses another CSI provider. Do not use node-local storage such as `local-path` as the RWX workspace class in a multi-node cluster.
 
-If there is **no default StorageClass**, it is recommended to prepare available PV / PVC resources or use a local path storage solution in advance; otherwise, you may later encounter:
+Before applying the cluster manifest, confirm that both StorageClasses exist:
 
-```text
-pod has unbound immediate PersistentVolumeClaims
+```bash
+kubectl get storageclass longhorn longhorn-rwx
 ```
 
 ---
@@ -167,10 +171,26 @@ cd ClawManager
 ```
 
 ### 6.2 Apply the deployment manifest
-Run in the repository root directory:
+Run one of the following commands from the repository root:
 
 ```bash
-kubectl apply -f deployments/k8s/clawmanager.yaml
+# k3s single node
+kubectl get nodes
+kubectl label node <node> clawmanager.io/storage-node=true --overwrite
+kubectl apply -f deployments/k3s/single-node/clawmanager.yaml
+
+# k3s multi-node cluster
+kubectl get storageclass longhorn longhorn-rwx
+kubectl apply -f deployments/k3s/cluster/clawmanager.yaml
+
+# standard Kubernetes single node
+kubectl get nodes
+kubectl label node <node> clawmanager.io/storage-node=true --overwrite
+kubectl apply -f deployments/k8s/single-node/clawmanager.yaml
+
+# standard Kubernetes multi-node cluster
+kubectl get storageclass longhorn longhorn-rwx
+kubectl apply -f deployments/k8s/cluster/clawmanager.yaml
 ```
 
 ### 6.3 Check base resources
@@ -192,9 +212,14 @@ If you see the following error:
 0/1 nodes are available: pod has unbound immediate PersistentVolumeClaims
 ```
 
-it means MySQL / MinIO in cluster storage cannot start because the PVC is not bound. Please jump directly to the end of this document:
+it means persistent storage cannot bind. Collect events and verify the selected storage profile:
 
-- [XI.1 Dedicated Handling for Storage Issues (PV/PVC)](#sec-14-storage)
+```bash
+kubectl get pvc -n clawmanager-system
+kubectl get pods -n clawmanager-system
+kubectl get events -n clawmanager-system --sort-by=.lastTimestamp
+kubectl describe pvc -n clawmanager-system clawmanager-workspaces
+```
 
 ---
 
@@ -671,92 +696,30 @@ If you see the following error:
 0/1 nodes are available: pod has unbound immediate PersistentVolumeClaims
 ```
 
-it means the cluster storage was not bound automatically. In this case, you can manually create local `hostPath` PV/PVC in the x86 single-node server style.
+it means the selected storage profile is not ready. Do not patch a multi-node cluster with ad hoc HostPath PVs. Use one of the validated paths:
 
-> This solution is suitable for single-node server testing or lightweight environments. For production environments, it is recommended to use formal storage such as NFS, Ceph, or cloud disks instead.
+- Single-node: label one node with `clawmanager.io/storage-node=true`, then apply `deployments/<k3s|k8s>/single-node/clawmanager.yaml`.
+- Cluster: ensure the RWO and RWX StorageClasses exist, then apply `deployments/<k3s|k8s>/cluster/clawmanager.yaml`.
 
-#### 11.1.1 Create PV
+Unsupported combinations:
+
+- multi-node HostPath
+- `local-path` RWX workspace in a multi-node cluster
+- cluster-internal Service DNS such as `workspace-store.clawmanager-system.svc.cluster.local` as an NFS server
+- durable MySQL, Redis, MinIO, workspace, or object data on `emptyDir`
+
+#### 11.1.1 Collect diagnostics
+
 ```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: mysql-pv-local
-spec:
-  capacity:
-    storage: 5Gi
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Delete
-  hostPath:
-    path: /tmp/mysql-data
-EOF
-
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: minio-pv-local
-spec:
-  capacity:
-    storage: 10Gi
-  accessModes:
-    - ReadWriteOnce
-  persistentVolumeReclaimPolicy: Delete
-  hostPath:
-    path: /tmp/minio-data
-EOF
-```
-
-#### 11.1.2 Create PVC
-```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: mysql-data
-  namespace: clawmanager-system
-spec:
-  storageClassName: ""
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 5Gi
-  volumeName: mysql-pv-local
-EOF
-
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: minio-data
-  namespace: clawmanager-system
-spec:
-  storageClassName: ""
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 10Gi
-  volumeName: minio-pv-local
-EOF
-```
-
-#### 11.1.3 Recreate Pod
-```bash
-kubectl delete pod --all -n clawmanager-system
-```
-
-#### 11.1.4 Observe status again
-```bash
+kubectl get storageclass
 kubectl get pvc -n clawmanager-system
+kubectl get events -n clawmanager-system --sort-by=.lastTimestamp
 kubectl get pods -n clawmanager-system -w
 ```
 
 Expected results:
-- `mysql-data` / `minio-data` are `Bound`
-- `mysql` / `minio` / `skill-scanner` / `clawmanager-app` are finally `Running`
+- `mysql-data` / `redis-data` / `minio-data` / `clawmanager-workspaces` are `Bound`
+- `mysql` / `clawmanager-team-redis` / `minio` / `skill-scanner` / `clawmanager-app` are finally `Running`
 
 ---
 
@@ -764,7 +727,7 @@ Expected results:
 | :--- | :--- | :--- |
 | `kubectl` connection to `localhost:8080` is refused | kubeconfig is not configured | Set `KUBECONFIG` or copy it to `~/.kube/config` |
 | Pod image pull timeout | Network to Docker Hub / GHCR is unstable | Configure image acceleration or a proxy |
-| MySQL / MinIO remain `Pending` | PVC not bound | Check the `StorageClass` or manually create PV/PVC |
+| MySQL / Redis / MinIO remain `Pending` | PVC not bound | Inspect StorageClass, PVC status, and PVC events |
 | The browser cannot open the page | NodePort is not open / the `port-forward` process was not kept running | Open the port or keep the forwarding terminal running |
 | The page opens but an OpenClaw instance cannot be created | Secure model is not configured | First configure and enable the secure model under **AI Gateway → Models** |
 | The instance remains “Creating” for a long time | The first image pull takes a long time / storage or network issues | Wait patiently, and if necessary check Pods and events |

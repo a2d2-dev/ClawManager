@@ -125,12 +125,16 @@ Runtime authors can follow the [Hermes Runtime Guide](./docs/hermes-runtime-agen
 
 ## Get Started
 
-ClawManager now has clearer entry points for both full Kubernetes deployments and lightweight cluster setups. If you want to evaluate the product quickly, start with the guide that matches your environment and then follow the first-use walkthrough.
+ClawManager now separates the Kubernetes distribution from the storage profile. Choose `k3s` or `k8s` first, then choose the storage profile that matches the cluster shape:
 
-- Standard Kubernetes deployment: [deployments/k8s/clawmanager.yaml](./deployments/k8s/clawmanager.yaml)
-- K3s or lightweight deployment: [deployments/k3s/clawmanager.yaml](./deployments/k3s/clawmanager.yaml)
+- k3s single-node HostPath: [deployments/k3s/single-node/clawmanager.yaml](./deployments/k3s/single-node/clawmanager.yaml)
+- k3s cluster CSI/RWX example: [deployments/k3s/cluster/clawmanager.yaml](./deployments/k3s/cluster/clawmanager.yaml)
+- Kubernetes single-node HostPath: [deployments/k8s/single-node/clawmanager.yaml](./deployments/k8s/single-node/clawmanager.yaml)
+- Kubernetes cluster CSI/RWX example: [deployments/k8s/cluster/clawmanager.yaml](./deployments/k8s/cluster/clawmanager.yaml)
 - Operations-oriented quick start and first login flow: [User Guide](./docs/use_guide_en.md)
 - Deployment notes and architecture-level context: [Deployment Guide](./docs/deployment.md)
+
+The cluster profile is validated with Longhorn (`longhorn` for RWO data and `longhorn-rwx` for RWX workspaces), but these StorageClass names are examples. You can replace them with any CSI classes that provide the same access modes.
 
 ## Three Control Planes
 

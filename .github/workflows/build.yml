@@ -115,7 +115,7 @@ jobs:
       - name: Deploy manifest to cluster
         shell: bash
         run: |
-          cp deployments/k8s/clawmanager.yaml /tmp/clawmanager-ci.yaml
+          cp deployments/k8s/cluster/clawmanager.yaml /tmp/clawmanager-ci.yaml
 
           python - <<'PY'
           from pathlib import Path
