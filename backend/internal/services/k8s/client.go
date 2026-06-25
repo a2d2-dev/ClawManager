@@ -29,15 +29,23 @@ const (
 
 // Client wraps the Kubernetes client
 type Client struct {
-	Clientset          kubernetes.Interface
-	Config             *rest.Config
-	Namespace          string
-	StorageClass       string
-	HostPathPrefix     string
-	WorkspaceRoot      string
-	WorkspaceNFSServer string
-	WorkspaceNFSPath   string
-	Mode               ConnectionMode
+	Clientset                kubernetes.Interface
+	Config                   *rest.Config
+	Namespace                string
+	StorageClass             string
+	StorageProfile           string
+	HostPathFallbackEnabled  bool
+	PVCBindTimeout           time.Duration
+	ControlPlaneStorageClass string
+	InstanceStorageClass     string
+	WorkspaceStorageClass    string
+	WorkspaceAccessMode      string
+	HostPathPrefix           string
+	WorkspaceRoot            string
+	WorkspacePVCClaimName    string
+	WorkspaceNFSServer       string
+	WorkspaceNFSPath         string
+	Mode                     ConnectionMode
 }
 
 var (
@@ -100,15 +108,23 @@ func Initialize(cfg *config.Config) error {
 	}
 
 	globalClient = &Client{
-		Clientset:          clientset,
-		Config:             restConfig,
-		Namespace:          cfg.GetNamespace(),
-		StorageClass:       cfg.GetStorageClass(),
-		HostPathPrefix:     cfg.GetHostPathPrefix(),
-		WorkspaceRoot:      cfg.Runtime.WorkspaceRoot,
-		WorkspaceNFSServer: cfg.Runtime.WorkspaceNFSServer,
-		WorkspaceNFSPath:   cfg.Runtime.WorkspaceNFSPath,
-		Mode:               detectedMode,
+		Clientset:                clientset,
+		Config:                   restConfig,
+		Namespace:                cfg.GetNamespace(),
+		StorageClass:             cfg.GetStorageClass(),
+		StorageProfile:           cfg.GetStorageProfile(),
+		HostPathFallbackEnabled:  cfg.Storage.HostPathFallbackEnabled,
+		PVCBindTimeout:           cfg.GetPVCBindTimeout(),
+		ControlPlaneStorageClass: cfg.GetControlPlaneStorageClass(),
+		InstanceStorageClass:     cfg.GetInstanceStorageClass(),
+		WorkspaceStorageClass:    cfg.GetWorkspaceStorageClass(),
+		WorkspaceAccessMode:      cfg.GetWorkspaceAccessMode(),
+		HostPathPrefix:           cfg.GetHostPathPrefix(),
+		WorkspaceRoot:            cfg.Runtime.WorkspaceRoot,
+		WorkspacePVCClaimName:    cfg.Runtime.WorkspacePVCClaimName,
+		WorkspaceNFSServer:       cfg.Runtime.WorkspaceNFSServer,
+		WorkspaceNFSPath:         cfg.Runtime.WorkspaceNFSPath,
+		Mode:                     detectedMode,
 	}
 
 	return nil

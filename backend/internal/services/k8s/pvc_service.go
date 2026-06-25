@@ -24,8 +24,12 @@ type PVCService struct {
 }
 
 const (
-	nodeHostnameLabel = "kubernetes.io/hostname"
-	noProvisionerName = "kubernetes.io/no-provisioner"
+	nodeHostnameLabel       = "kubernetes.io/hostname"
+	noProvisionerName       = "kubernetes.io/no-provisioner"
+	storageProfileLabel     = "clawmanager.io/storage-profile"
+	storageProfileSingle    = "single-node"
+	storageProfileLegacyNFS = "legacy-nfs"
+	defaultPVCBindTimeout   = 2 * time.Minute
 )
 
 // NewPVCService creates a new PVC service
@@ -57,7 +61,7 @@ func (s *PVCService) CreatePVC(ctx context.Context, userID, instanceID int, stor
 
 	// Use default storage class if not specified
 	if storageClass == "" {
-		storageClass = s.client.StorageClass
+		storageClass = firstNonEmpty(s.client.InstanceStorageClass, s.client.StorageClass)
 	}
 
 	fmt.Printf("Creating PVC %s in namespace %s with storageClass: %s\n", pvcName, namespace, storageClass)
@@ -119,9 +123,11 @@ func (s *PVCService) CreatePVC(ctx context.Context, userID, instanceID int, stor
 		return nil, fmt.Errorf("failed to create PVC %s: %w", pvcName, err)
 	}
 
-	if usesManualHostPathFallback(storageClass) {
+	if s.shouldUseManualHostPathFallback(storageClass) {
 		fmt.Printf("PVC %s created, scheduling manual hostPath binding monitor...\n", pvcName)
-		go s.monitorPVCBinding(context.Background(), namespace, pvcName, userID, instanceID, storageSizeGB, storageClass, 15*time.Second)
+		go s.monitorPVCBinding(context.Background(), namespace, pvcName, userID, instanceID, storageSizeGB, storageClass, s.pvcBindTimeout())
+	} else if usesManualHostPathFallback(storageClass) {
+		fmt.Printf("PVC %s created with manual storageClass, but hostPath fallback is disabled for storage profile %q\n", pvcName, s.storageProfile())
 	} else {
 		fmt.Printf("PVC %s created with dynamic storageClass %s, leaving binding to the provisioner\n", pvcName, storageClass)
 	}
@@ -145,9 +151,10 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 	pvcName := s.client.GetTeamSharedPVCName(teamID)
 	namespace := s.client.GetNamespace(userID)
 	if storageClass == "" {
-		storageClass = s.client.StorageClass
+		storageClass = firstNonEmpty(s.client.WorkspaceStorageClass, s.client.StorageClass)
 	}
 	storageSize := resource.MustParse(fmt.Sprintf("%dGi", storageSizeGB))
+	workspaceAccessMode := workspacePVCAccessMode(s.client.WorkspaceAccessMode)
 	useWorkspaceNFS := strings.TrimSpace(s.client.WorkspaceNFSServer) != ""
 	if useWorkspaceNFS {
 		if err := s.ensureTeamSharedWorkspaceDirectory(userID, teamID); err != nil {
@@ -167,7 +174,7 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteMany,
+				workspaceAccessMode,
 			},
 			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
@@ -188,8 +195,8 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 						return nil, err
 					}
 				}
-				if existingPVC.Status.Phase != corev1.ClaimBound && usesManualHostPathFallback(storageClass) {
-					go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, 15*time.Second)
+				if existingPVC.Status.Phase != corev1.ClaimBound && s.shouldUseManualHostPathFallback(storageClass) {
+					go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, s.pvcBindTimeout())
 				}
 				return existingPVC, nil
 			}
@@ -202,14 +209,18 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 			return nil, err
 		}
 	}
-	if usesManualHostPathFallback(storageClass) {
-		go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, 15*time.Second)
+	if s.shouldUseManualHostPathFallback(storageClass) {
+		go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, s.pvcBindTimeout())
 	}
 	return createdPVC, nil
 }
 
 func usesManualHostPathFallback(storageClass string) bool {
 	return strings.EqualFold(strings.TrimSpace(storageClass), "manual")
+}
+
+func (s *PVCService) shouldUseManualHostPathFallback(storageClass string) bool {
+	return s.hostPathFallbackEnabled() && usesManualHostPathFallback(storageClass)
 }
 
 func (s *PVCService) monitorTeamSharedPVCBinding(ctx context.Context, namespace, pvcName string, userID, teamID, storageSizeGB int, storageClass string, timeout time.Duration) {
@@ -234,6 +245,9 @@ func (s *PVCService) waitForTeamSharedPVCBinding(ctx context.Context, namespace,
 	for {
 		select {
 		case <-timeoutChan:
+			if usesManualHostPathFallback(storageClass) && !s.hostPathFallbackEnabled() {
+				return nil, fmt.Errorf("Team shared PVC %s was not bound after %s and hostPath fallback is disabled for storage profile %q", pvcName, timeout, s.storageProfile())
+			}
 			if !usesManualHostPathFallback(storageClass) {
 				fmt.Printf("Team shared PVC %s binding timeout with dynamic storageClass %s, leaving binding to the provisioner\n", pvcName, storageClass)
 				return pvc, nil
@@ -297,10 +311,11 @@ func (s *PVCService) createPVForTeamSharedPVC(ctx context.Context, namespace, pv
 		ObjectMeta: metav1.ObjectMeta{
 			Name: pvName,
 			Labels: map[string]string{
-				"app":        "clawreef",
-				"user-id":    fmt.Sprintf("%d", userID),
-				"team-id":    fmt.Sprintf("%d", teamID),
-				"managed-by": "clawreef",
+				"app":               "clawreef",
+				"user-id":           fmt.Sprintf("%d", userID),
+				"team-id":           fmt.Sprintf("%d", teamID),
+				"managed-by":        "clawreef",
+				storageProfileLabel: storageProfileSingle,
 			},
 		},
 		Spec: corev1.PersistentVolumeSpec{
@@ -308,7 +323,7 @@ func (s *PVCService) createPVForTeamSharedPVC(ctx context.Context, namespace, pv
 				corev1.ResourceStorage: storageSize,
 			},
 			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteMany,
+				workspacePVCAccessMode(s.client.WorkspaceAccessMode),
 			},
 			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
 			StorageClassName:              storageClass,
@@ -380,10 +395,11 @@ func (s *PVCService) ensureWorkspaceNFSPVForTeamSharedPVC(ctx context.Context, n
 		ObjectMeta: metav1.ObjectMeta{
 			Name: pvName,
 			Labels: map[string]string{
-				"app":        "clawreef",
-				"user-id":    fmt.Sprintf("%d", userID),
-				"team-id":    fmt.Sprintf("%d", teamID),
-				"managed-by": "clawreef",
+				"app":               "clawreef",
+				"user-id":           fmt.Sprintf("%d", userID),
+				"team-id":           fmt.Sprintf("%d", teamID),
+				"managed-by":        "clawreef",
+				storageProfileLabel: storageProfileLegacyNFS,
 			},
 		},
 		Spec: corev1.PersistentVolumeSpec{
@@ -642,6 +658,9 @@ func (s *PVCService) waitForPVCBinding(ctx context.Context, namespace, pvcName s
 	for {
 		select {
 		case <-timeoutChan:
+			if usesManualHostPathFallback(storageClass) && !s.hostPathFallbackEnabled() {
+				return nil, fmt.Errorf("PVC %s was not bound after %s and hostPath fallback is disabled for storage profile %q", pvcName, timeout, s.storageProfile())
+			}
 			if !usesManualHostPathFallback(storageClass) {
 				fmt.Printf("PVC %s binding timeout with dynamic storageClass %s, leaving binding to the provisioner\n", pvcName, storageClass)
 				return pvc, nil
@@ -728,10 +747,11 @@ func (s *PVCService) createPVForPVC(ctx context.Context, namespace, pvcName stri
 		ObjectMeta: metav1.ObjectMeta{
 			Name: pvName,
 			Labels: map[string]string{
-				"app":         "clawreef",
-				"user-id":     fmt.Sprintf("%d", userID),
-				"instance-id": fmt.Sprintf("%d", instanceID),
-				"managed-by":  "clawreef",
+				"app":               "clawreef",
+				"user-id":           fmt.Sprintf("%d", userID),
+				"instance-id":       fmt.Sprintf("%d", instanceID),
+				"managed-by":        "clawreef",
+				storageProfileLabel: storageProfileSingle,
 			},
 		},
 		Spec: corev1.PersistentVolumeSpec{
@@ -825,7 +845,7 @@ func (s *PVCService) NodeSelectorForPVC(ctx context.Context, userID, instanceID 
 		return nil, fmt.Errorf("failed to get PVC %s: %w", pvcName, err)
 	}
 
-	storageClass = pvcStorageClassName(pvc, storageClass)
+	storageClass = pvcStorageClassName(pvc, firstNonEmpty(storageClass, s.client.InstanceStorageClass, s.client.StorageClass))
 
 	if strings.TrimSpace(pvc.Spec.VolumeName) != "" {
 		pv, err := s.client.Clientset.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{})
@@ -845,7 +865,7 @@ func (s *PVCService) nodeSelectorForStorageClass(ctx context.Context, storageCla
 
 	storageClass = strings.TrimSpace(storageClass)
 	if storageClass == "" {
-		storageClass = strings.TrimSpace(s.client.StorageClass)
+		storageClass = firstNonEmpty(s.client.InstanceStorageClass, s.client.StorageClass)
 	}
 	if storageClass == "" {
 		return nil, nil
@@ -870,6 +890,63 @@ func pvcStorageClassName(pvc *corev1.PersistentVolumeClaim, fallback string) str
 		storageClass = strings.TrimSpace(*pvc.Spec.StorageClassName)
 	}
 	return storageClass
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func workspacePVCAccessMode(value string) corev1.PersistentVolumeAccessMode {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "readwriteonce", "rwo":
+		return corev1.ReadWriteOnce
+	case "readonlymany", "rox":
+		return corev1.ReadOnlyMany
+	case "readwritemany", "rwx", "":
+		return corev1.ReadWriteMany
+	default:
+		return corev1.ReadWriteMany
+	}
+}
+
+func (s *PVCService) pvcBindTimeout() time.Duration {
+	if s != nil && s.client != nil && s.client.PVCBindTimeout > 0 {
+		return s.client.PVCBindTimeout
+	}
+	return defaultPVCBindTimeout
+}
+
+func (s *PVCService) storageProfile() string {
+	if s == nil || s.client == nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(s.client.StorageProfile))
+}
+
+func (s *PVCService) hostPathFallbackEnabled() bool {
+	if s == nil || s.client == nil || !s.client.HostPathFallbackEnabled {
+		return false
+	}
+	profile := s.storageProfile()
+	return profile == "" || profile == storageProfileSingle
+}
+
+func isClawManagerHostPathPV(pv *corev1.PersistentVolume) bool {
+	if pv == nil || pv.Spec.HostPath == nil {
+		return false
+	}
+	if pv.Labels["managed-by"] != "clawreef" {
+		return false
+	}
+	if strings.EqualFold(pv.Labels[storageProfileLabel], storageProfileSingle) {
+		return true
+	}
+	return strings.HasPrefix(pv.Name, "clawreef-pv-user-")
 }
 
 func nodeSelectorForHostname(hostname string) map[string]string {
@@ -914,10 +991,7 @@ func (s *PVCService) DeletePVC(ctx context.Context, userID, instanceID int) erro
 		if errors.IsNotFound(err) {
 			// PVC doesn't exist, still try to delete the PV directly
 			fmt.Printf("PVC %s not found, trying to delete PV %s directly\n", pvcName, pvName)
-			deleteErr := s.client.Clientset.CoreV1().PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{})
-			if deleteErr != nil && !errors.IsNotFound(deleteErr) {
-				fmt.Printf("Warning: failed to delete PV %s: %v\n", pvName, deleteErr)
-			}
+			s.deleteManagedHostPathPV(ctx, pvName)
 			return nil
 		}
 		return fmt.Errorf("failed to get PVC %s: %w", pvcName, err)
@@ -941,32 +1015,41 @@ func (s *PVCService) DeletePVC(ctx context.Context, userID, instanceID int) erro
 
 	// Delete the manually created PV
 	// First try the predictable name
-	err = s.client.Clientset.CoreV1().PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{})
-	if err != nil {
-		if errors.IsNotFound(err) {
-			fmt.Printf("PV %s (predictable name) not found\n", pvName)
-		} else {
-			fmt.Printf("Warning: failed to delete PV %s: %v\n", pvName, err)
-		}
-	} else {
-		fmt.Printf("PV %s deleted successfully\n", pvName)
-	}
+	s.deleteManagedHostPathPV(ctx, pvName)
 
 	// Also try to delete the bound PV if it exists and is different
 	if boundPVName != "" && boundPVName != pvName {
-		err = s.client.Clientset.CoreV1().PersistentVolumes().Delete(ctx, boundPVName, metav1.DeleteOptions{})
-		if err != nil {
-			if errors.IsNotFound(err) {
-				fmt.Printf("PV %s (bound) not found or already deleted\n", boundPVName)
-			} else {
-				fmt.Printf("Warning: failed to delete bound PV %s: %v\n", boundPVName, err)
-			}
-		} else {
-			fmt.Printf("Bound PV %s deleted successfully\n", boundPVName)
-		}
+		s.deleteManagedHostPathPV(ctx, boundPVName)
 	}
 
 	return nil
+}
+
+func (s *PVCService) deleteManagedHostPathPV(ctx context.Context, pvName string) {
+	pvName = strings.TrimSpace(pvName)
+	if pvName == "" || s == nil || s.client == nil || s.client.Clientset == nil {
+		return
+	}
+	pv, err := s.client.Clientset.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			fmt.Printf("PV %s not found or already deleted\n", pvName)
+		} else {
+			fmt.Printf("Warning: failed to get PV %s before delete: %v\n", pvName, err)
+		}
+		return
+	}
+	if !isClawManagerHostPathPV(pv) {
+		fmt.Printf("Skipping PV %s delete because it is not a ClawManager-managed hostPath PV\n", pvName)
+		return
+	}
+	if err := s.client.Clientset.CoreV1().PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{}); err != nil {
+		if !errors.IsNotFound(err) {
+			fmt.Printf("Warning: failed to delete PV %s: %v\n", pvName, err)
+		}
+		return
+	}
+	fmt.Printf("PV %s deleted successfully\n", pvName)
 }
 
 // DeleteTeamSharedPVC deletes a Team shared PVC and the predictable hostPath PV
@@ -986,11 +1069,7 @@ func (s *PVCService) DeleteTeamSharedPVC(ctx context.Context, userID, teamID int
 			return fmt.Errorf("failed to delete Team shared PVC %s/%s: %w", namespace, pvcName, err)
 		}
 	}
-	if err := s.client.Clientset.CoreV1().PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{}); err != nil {
-		if !errors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete Team shared PV %s: %w", pvName, err)
-		}
-	}
+	s.deleteManagedHostPathPV(ctx, pvName)
 	return nil
 }
 

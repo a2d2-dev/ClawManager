@@ -40,7 +40,7 @@ Geeignet für Serverumgebungen, die bereits über einen Standard-Kubernetes-Clus
 Unabhängig davon, welche Methode Sie verwenden, wird am Ende dasselbe ClawManager-Manifest angewendet:
 
 ```bash
-kubectl apply -f deployments/k8s/clawmanager.yaml
+kubectl apply -f deployments/k8s/cluster/clawmanager.yaml
 ```
 
 ---
@@ -170,7 +170,7 @@ cd ClawManager
 Führen Sie im Wurzelverzeichnis des Repositorys aus:
 
 ```bash
-kubectl apply -f deployments/k8s/clawmanager.yaml
+kubectl apply -f deployments/k8s/cluster/clawmanager.yaml
 ```
 
 ### 6.3 Basisressourcen prüfen

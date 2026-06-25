@@ -115,7 +115,8 @@ jobs:
       - name: Deploy manifest to cluster
         shell: bash
         run: |
-          cp deployments/k8s/clawmanager.yaml /tmp/clawmanager-ci.yaml
+          kubectl label node clawmanager-ci-control-plane clawmanager.io/storage-node=true --overwrite
+          cp deployments/k8s/single-node/clawmanager.yaml /tmp/clawmanager-ci.yaml
 
           python - <<'PY'
           from pathlib import Path

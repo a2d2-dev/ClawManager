@@ -10,6 +10,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -324,6 +325,134 @@ func TestCreateTeamSharedPVCRejectsExistingNonWorkspaceNFSPV(t *testing.T) {
 	_, err := service.CreateTeamSharedPVC(ctx, 1, 28, 10, "manual")
 	if err == nil || !strings.Contains(err.Error(), "workspace NFS") {
 		t.Fatalf("expected existing hostPath Team PV to be rejected, got %v", err)
+	}
+}
+
+func TestCreatePVCUsesInstanceStorageClassDefault(t *testing.T) {
+	ctx := context.Background()
+	client := &Client{
+		Clientset:            fake.NewSimpleClientset(),
+		Namespace:            "clawmanager",
+		StorageClass:         "standard",
+		InstanceStorageClass: "longhorn",
+	}
+	service := &PVCService{
+		client:           client,
+		namespaceService: &NamespaceService{client: client},
+	}
+
+	pvc, err := service.CreatePVC(ctx, 1, 371, 10, "")
+	if err != nil {
+		t.Fatalf("CreatePVC returned error: %v", err)
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "longhorn" {
+		t.Fatalf("PVC storage class = %#v, want longhorn", pvc.Spec.StorageClassName)
+	}
+}
+
+func TestCreateTeamSharedPVCUsesWorkspaceStorageDefaults(t *testing.T) {
+	ctx := context.Background()
+	client := &Client{
+		Clientset:             fake.NewSimpleClientset(),
+		Namespace:             "clawmanager",
+		StorageClass:          "standard",
+		WorkspaceStorageClass: "longhorn-rwx",
+		WorkspaceAccessMode:   "ReadWriteMany",
+	}
+	service := &PVCService{
+		client:           client,
+		namespaceService: &NamespaceService{client: client},
+	}
+
+	pvc, err := service.CreateTeamSharedPVC(ctx, 1, 28, 10, "")
+	if err != nil {
+		t.Fatalf("CreateTeamSharedPVC returned error: %v", err)
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "longhorn-rwx" {
+		t.Fatalf("PVC storage class = %#v, want longhorn-rwx", pvc.Spec.StorageClassName)
+	}
+	if len(pvc.Spec.AccessModes) != 1 || pvc.Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Fatalf("PVC access modes = %#v, want ReadWriteMany", pvc.Spec.AccessModes)
+	}
+}
+
+func TestWaitForPVCBindingDoesNotCreateHostPathPVWhenFallbackDisabled(t *testing.T) {
+	ctx := context.Background()
+	namespace := "clawmanager-user-162"
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "clawreef-371-pvc",
+			Namespace: namespace,
+		},
+		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+	}
+	clientset := fake.NewSimpleClientset(pvc)
+	service := &PVCService{
+		client: &Client{
+			Clientset:               clientset,
+			Namespace:               "clawmanager",
+			StorageProfile:          "cluster",
+			HostPathFallbackEnabled: false,
+		},
+	}
+
+	_, err := service.waitForPVCBinding(ctx, namespace, pvc.Name, 162, 371, 10, "manual", time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "hostPath fallback is disabled") {
+		t.Fatalf("expected disabled fallback error, got %v", err)
+	}
+	pvs, listErr := clientset.CoreV1().PersistentVolumes().List(ctx, metav1.ListOptions{})
+	if listErr != nil {
+		t.Fatalf("failed to list PVs: %v", listErr)
+	}
+	if len(pvs.Items) != 0 {
+		t.Fatalf("expected no hostPath PV to be created, got %#v", pvs.Items)
+	}
+}
+
+func TestDeletePVCSkipsDynamicProvisionerPV(t *testing.T) {
+	ctx := context.Background()
+	namespace := "clawmanager-user-162"
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "clawreef-371-pvc",
+			Namespace: namespace,
+			Labels:    map[string]string{"instance-id": "371"},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			VolumeName: "pvc-dynamic-123",
+		},
+		Status: corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimBound},
+	}
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pvc-dynamic-123",
+			Labels: map[string]string{
+				"managed-by": "external-provisioner",
+			},
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{Driver: "driver.longhorn.io"},
+			},
+		},
+	}
+	client := &Client{
+		Clientset: fake.NewSimpleClientset(pvc, pv),
+		Namespace: "clawmanager",
+	}
+	service := &PVCService{
+		client:           client,
+		namespaceService: &NamespaceService{client: client},
+	}
+
+	if err := service.DeletePVC(ctx, 162, 371); err != nil {
+		t.Fatalf("DeletePVC returned error: %v", err)
+	}
+	if _, err := client.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvc.Name, metav1.GetOptions{}); !errors.IsNotFound(err) {
+		t.Fatalf("expected PVC to be deleted, got err=%v", err)
+	}
+	if _, err := client.Clientset.CoreV1().PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{}); err != nil {
+		t.Fatalf("dynamic provisioner PV must not be deleted, got %v", err)
 	}
 }
 

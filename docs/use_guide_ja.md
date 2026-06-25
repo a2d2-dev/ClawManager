@@ -40,7 +40,7 @@
 どの方式を使用しても、最終的には同じ ClawManager マニフェストを適用します：
 
 ```bash
-kubectl apply -f deployments/k8s/clawmanager.yaml
+kubectl apply -f deployments/k8s/cluster/clawmanager.yaml
 ```
 
 ---
@@ -170,7 +170,7 @@ cd ClawManager
 リポジトリのルートディレクトリで実行します：
 
 ```bash
-kubectl apply -f deployments/k8s/clawmanager.yaml
+kubectl apply -f deployments/k8s/cluster/clawmanager.yaml
 ```
 
 ### 6.3 基本リソースの確認

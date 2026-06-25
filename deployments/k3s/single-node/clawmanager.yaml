@@ -1,3 +1,8 @@
+# ClawManager single-node install profile.
+# Official validation target: HostPath on one labeled storage node.
+# Before installing, label exactly one node:
+#   kubectl label node <node> clawmanager.io/storage-node=true --overwrite
+# Replace paths or StorageClass names only if you understand the single-node constraints.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -16,6 +21,10 @@ stringData:
   runtime-agent-control-token: change-me-runtime-control-token
   runtime-agent-report-token: change-me-runtime-report-token
   openclaw-gateway-token: change-me-openclaw-gateway-token
+  minio-root-user: minioadmin
+  minio-root-password: minioadmin123
+  minio-access-key: minioadmin
+  minio-secret-key: minioadmin123
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -709,6 +718,35 @@ data:
     );
 ---
 apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: clawmanager-mysql-pv
+  labels:
+    app: clawmanager
+    managed-by: clawmanager
+    clawmanager.io/storage-profile: single-node
+    clawmanager.io/storage-node: "true"
+spec:
+  capacity:
+    storage: 5Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: clawmanager.io/storage-node
+              operator: In
+              values:
+                - "true"
+  hostPath:
+    path: /data/clawmanager/system/mysql
+    type: DirectoryOrCreate
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: mysql-data
@@ -719,7 +757,137 @@ spec:
   resources:
     requests:
       storage: 5Gi
-  storageClassName: local-path
+  storageClassName: manual
+  volumeName: clawmanager-mysql-pv
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: clawmanager-minio-pv
+  labels:
+    app: clawmanager
+    managed-by: clawmanager
+    clawmanager.io/storage-profile: single-node
+    clawmanager.io/storage-node: "true"
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: clawmanager.io/storage-node
+              operator: In
+              values:
+                - "true"
+  hostPath:
+    path: /data/clawmanager/system/minio
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: clawmanager-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: manual
+  volumeName: clawmanager-minio-pv
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: clawmanager-redis-pv
+  labels:
+    app: clawmanager
+    managed-by: clawmanager
+    clawmanager.io/storage-profile: single-node
+    clawmanager.io/storage-node: "true"
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: clawmanager.io/storage-node
+              operator: In
+              values:
+                - "true"
+  hostPath:
+    path: /data/clawmanager/system/redis
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: clawmanager-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: manual
+  volumeName: clawmanager-redis-pv
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: clawmanager-workspaces-pv
+  labels:
+    app: clawmanager
+    managed-by: clawmanager
+    clawmanager.io/storage-profile: single-node
+    clawmanager.io/storage-node: "true"
+spec:
+  capacity:
+    storage: 50Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: clawmanager.io/storage-node
+              operator: In
+              values:
+                - "true"
+  hostPath:
+    path: /data/clawmanager/system/workspaces
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: clawmanager-workspaces
+  namespace: clawmanager-system
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: manual
+  volumeName: clawmanager-workspaces-pv
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -740,6 +908,8 @@ spec:
         - name: mysql
           image: mysql:8.4.8
           imagePullPolicy: IfNotPresent
+          args:
+            - "--innodb-use-native-aio=0"
           ports:
             - containerPort: 3306
           env:
@@ -791,6 +961,75 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: minio
+  namespace: clawmanager-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: clawmanager-secrets
+                  key: minio-root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: clawmanager-secrets
+                  key: minio-root-password
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: minio-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: clawmanager-system
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api
+    - name: console
+      port: 9001
+      targetPort: console
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: clawmanager-team-redis
   namespace: clawmanager-system
 spec:
@@ -824,7 +1063,8 @@ spec:
               mountPath: /data
       volumes:
         - name: redis-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: redis-data
 ---
 apiVersion: v1
 kind: Service
@@ -851,67 +1091,6 @@ spec:
     - name: redis
       port: 6379
       targetPort: redis
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: clawmanager-workspaces
-  namespace: clawmanager-system
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 50Gi
-  storageClassName: local-path
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: workspace-store
-  namespace: clawmanager-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: workspace-store
-  template:
-    metadata:
-      labels:
-        app: workspace-store
-    spec:
-      containers:
-        - name: nfs-server
-          image: itsthenetwork/nfs-server-alpine:12
-          imagePullPolicy: IfNotPresent
-          securityContext:
-            privileged: true
-          env:
-            - name: SHARED_DIRECTORY
-              value: /exports/workspaces
-          ports:
-            - name: nfs
-              containerPort: 2049
-          volumeMounts:
-            - name: workspaces
-              mountPath: /exports/workspaces
-      volumes:
-        - name: workspaces
-          persistentVolumeClaim:
-            claimName: clawmanager-workspaces
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: workspace-store
-  namespace: clawmanager-system
-spec:
-  selector:
-    app: workspace-store
-  ports:
-    - name: nfs
-      port: 2049
-      targetPort: nfs
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -1009,10 +1188,65 @@ subjects:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: skill-scanner
+  namespace: clawmanager-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: skill-scanner
+  template:
+    metadata:
+      labels:
+        app: skill-scanner
+    spec:
+      containers:
+        - name: skill-scanner
+          image: ghcr.io/yuan-lab-llm/skill-scanner:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /opt/skill-scanner-venv/bin/skill-scanner-api
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+          env:
+            - name: SKILL_SCANNER_LLM_API_KEY
+              value: ""
+            - name: SKILL_SCANNER_LLM_MODEL
+              value: ""
+            - name: SKILL_SCANNER_LLM_BASE_URL
+              value: ""
+            - name: SKILL_SCANNER_META_LLM_API_KEY
+              value: ""
+            - name: SKILL_SCANNER_META_LLM_MODEL
+              value: ""
+            - name: SKILL_SCANNER_META_LLM_BASE_URL
+              value: ""
+          ports:
+            - name: http
+              containerPort: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: skill-scanner
+  namespace: clawmanager-system
+spec:
+  selector:
+    app: skill-scanner
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: clawmanager-app
   namespace: clawmanager-system
 spec:
-  replicas: 3
+  replicas: 1
   selector:
     matchLabels:
       app: clawmanager-app
@@ -1054,12 +1288,50 @@ spec:
                 secretKeyRef:
                   name: clawmanager-secrets
                   key: jwt-secret
+            - name: OBJECT_STORAGE_ENDPOINT
+              value: "minio.clawmanager-system.svc.cluster.local:9000"
+            - name: OBJECT_STORAGE_REGION
+              value: ""
+            - name: OBJECT_STORAGE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clawmanager-secrets
+                  key: minio-access-key
+            - name: OBJECT_STORAGE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: clawmanager-secrets
+                  key: minio-secret-key
+            - name: OBJECT_STORAGE_BUCKET
+              value: "clawmanager-skills"
+            - name: OBJECT_STORAGE_USE_SSL
+              value: "false"
+            - name: OBJECT_STORAGE_BASE_PATH
+              value: "skills"
+            - name: OBJECT_STORAGE_FORCE_PATH_STYLE
+              value: "true"
             - name: K8S_MODE
               value: "incluster"
             - name: K8S_NAMESPACE
               value: "clawmanager"
             - name: K8S_STORAGE_CLASS
-              value: "local-path"
+              value: "manual"
+            - name: CLAWMANAGER_STORAGE_PROFILE
+              value: "single-node"
+            - name: K8S_HOSTPATH_FALLBACK_ENABLED
+              value: "true"
+            - name: K8S_PVC_BIND_TIMEOUT
+              value: "2m"
+            - name: K8S_CONTROL_PLANE_STORAGE_CLASS
+              value: "manual"
+            - name: K8S_INSTANCE_STORAGE_CLASS
+              value: "manual"
+            - name: K8S_WORKSPACE_STORAGE_CLASS
+              value: "manual"
+            - name: K8S_WORKSPACE_ACCESS_MODE
+              value: "ReadWriteMany"
+            - name: K8S_PV_HOST_PATH_PREFIX
+              value: "/data/clawreef"
             - name: CLAWMANAGER_WORKSPACE_ARCHIVE_MAX_MIB
               value: "500"
             - name: PLATFORM_REDIS_URL
@@ -1089,10 +1361,8 @@ spec:
               value: "clawmanager-system"
             - name: RUNTIME_WORKSPACE_ROOT
               value: "/workspaces"
-            - name: RUNTIME_WORKSPACE_NFS_SERVER
-              value: "workspace-store.clawmanager-system.svc.cluster.local"
-            - name: RUNTIME_WORKSPACE_NFS_PATH
-              value: "/"
+            - name: RUNTIME_WORKSPACE_PVC_CLAIM
+              value: "clawmanager-workspaces"
             - name: RUNTIME_MAX_GATEWAYS_PER_POD
               value: "100"
             - name: RUNTIME_GATEWAY_PORT_START
@@ -1128,43 +1398,34 @@ spec:
               value: "clawmanager-system"
             - name: SKILL_SCANNER_DEPLOYMENT
               value: "skill-scanner"
-            - name: OBJECT_STORAGE_LOCAL_FALLBACK
-              value: "/data/object-storage"
           volumeMounts:
             - name: tls-cert
               mountPath: /var/run/clawreef-tls
               readOnly: true
-            - name: object-storage
-              mountPath: /data/object-storage
             - name: workspaces
               mountPath: /workspaces
           readinessProbe:
             httpGet:
+              scheme: HTTPS
               path: /healthz
               port: https
-              scheme: HTTPS
             initialDelaySeconds: 10
-            periodSeconds: 5
-            timeoutSeconds: 3
+            periodSeconds: 10
           livenessProbe:
             httpGet:
+              scheme: HTTPS
               path: /healthz
               port: https
-              scheme: HTTPS
             initialDelaySeconds: 30
             periodSeconds: 20
-            timeoutSeconds: 5
       volumes:
         - name: tls-cert
           secret:
             secretName: clawmanager-tls
             optional: true
-        - name: object-storage
-          emptyDir: {}
         - name: workspaces
-          nfs:
-            server: workspace-store.clawmanager-system.svc.cluster.local
-            path: /exports/workspaces
+          persistentVolumeClaim:
+            claimName: clawmanager-workspaces
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -1250,9 +1511,8 @@ spec:
               mountPath: /workspaces
       volumes:
         - name: workspaces
-          nfs:
-            server: workspace-store.clawmanager-system.svc.cluster.local
-            path: /exports/workspaces
+          persistentVolumeClaim:
+            claimName: clawmanager-workspaces
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -1349,9 +1609,8 @@ spec:
               mountPath: /workspaces
       volumes:
         - name: workspaces
-          nfs:
-            server: workspace-store.clawmanager-system.svc.cluster.local
-            path: /exports/workspaces
+          persistentVolumeClaim:
+            claimName: clawmanager-workspaces
 ---
 apiVersion: v1
 kind: Service
@@ -1366,7 +1625,7 @@ spec:
     - name: https
       port: 443
       targetPort: https
-      nodePort: 39443
+      nodePort: 30443
 ---
 apiVersion: v1
 kind: Service
@@ -1395,58 +1654,3 @@ spec:
     - name: proxy
       port: 3128
       targetPort: 9001
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: skill-scanner
-  namespace: clawmanager-system
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: skill-scanner
-  template:
-    metadata:
-      labels:
-        app: skill-scanner
-    spec:
-      containers:
-        - name: skill-scanner
-          image: ghcr.io/yuan-lab-llm/skill-scanner:latest
-          imagePullPolicy: IfNotPresent
-          command:
-            - /opt/skill-scanner-venv/bin/skill-scanner-api
-            - --host
-            - 0.0.0.0
-            - --port
-            - "8000"
-          env:
-            - name: SKILL_SCANNER_LLM_API_KEY
-              value: ""
-            - name: SKILL_SCANNER_LLM_MODEL
-              value: ""
-            - name: SKILL_SCANNER_LLM_BASE_URL
-              value: ""
-            - name: SKILL_SCANNER_META_LLM_API_KEY
-              value: ""
-            - name: SKILL_SCANNER_META_LLM_MODEL
-              value: ""
-            - name: SKILL_SCANNER_META_LLM_BASE_URL
-              value: ""
-          ports:
-            - name: http
-              containerPort: 8000
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: skill-scanner
-  namespace: clawmanager-system
-spec:
-  selector:
-    app: skill-scanner
-  ports:
-    - name: http
-      port: 8000
-      targetPort: http

@@ -10,10 +10,7 @@ import (
 
 func TestRuntimeManifestsStartHermesRuntime(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", "..", ".."))
-	for _, manifest := range []string{
-		filepath.Join(repoRoot, "deployments", "k8s", "clawmanager.yaml"),
-		filepath.Join(repoRoot, "deployments", "k3s", "clawmanager.yaml"),
-	} {
+	for _, manifest := range deploymentRuntimeManifests(repoRoot) {
 		t.Run(manifest, func(t *testing.T) {
 			raw, err := os.ReadFile(manifest)
 			if err != nil {
@@ -33,11 +30,7 @@ func TestRuntimeManifestsStartHermesRuntime(t *testing.T) {
 
 func TestRuntimeManifestsSeedLiteDefaultImages(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", "..", ".."))
-	for _, manifest := range []string{
-		filepath.Join(repoRoot, "deployments", "k8s", "clawmanager.yaml"),
-		filepath.Join(repoRoot, "deployments", "k3s", "clawmanager.yaml"),
-		filepath.Join(repoRoot, "backend", "deployments", "k8s", "clawreef-incluster.yaml"),
-	} {
+	for _, manifest := range append(deploymentRuntimeManifests(repoRoot), filepath.Join(repoRoot, "backend", "deployments", "k8s", "clawreef-incluster.yaml")) {
 		t.Run(manifest, func(t *testing.T) {
 			raw, err := os.ReadFile(manifest)
 			if err != nil {
@@ -57,10 +50,7 @@ func TestRuntimeManifestsSeedLiteDefaultImages(t *testing.T) {
 
 func TestRuntimeManifestsExposeOpenClawGatewayOnPodIP(t *testing.T) {
 	repoRoot := filepath.Clean(filepath.Join("..", "..", ".."))
-	for _, manifest := range []string{
-		filepath.Join(repoRoot, "deployments", "k8s", "clawmanager.yaml"),
-		filepath.Join(repoRoot, "deployments", "k3s", "clawmanager.yaml"),
-	} {
+	for _, manifest := range deploymentRuntimeManifests(repoRoot) {
 		t.Run(manifest, func(t *testing.T) {
 			raw, err := os.ReadFile(manifest)
 			if err != nil {
@@ -75,5 +65,14 @@ func TestRuntimeManifestsExposeOpenClawGatewayOnPodIP(t *testing.T) {
 				t.Fatalf("manifest %s must not use OpenClaw --bind auto because it can bind to loopback inside runtime pods", manifest)
 			}
 		})
+	}
+}
+
+func deploymentRuntimeManifests(repoRoot string) []string {
+	return []string{
+		filepath.Join(repoRoot, "deployments", "k8s", "cluster", "clawmanager.yaml"),
+		filepath.Join(repoRoot, "deployments", "k8s", "single-node", "clawmanager.yaml"),
+		filepath.Join(repoRoot, "deployments", "k3s", "cluster", "clawmanager.yaml"),
+		filepath.Join(repoRoot, "deployments", "k3s", "single-node", "clawmanager.yaml"),
 	}
 }
