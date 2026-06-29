@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Ban,
   BarChart3,
   Clock3,
+  ChevronDown,
   Copy,
   Cpu,
   Eye,
@@ -108,6 +109,10 @@ function formatBytes(value?: number) {
 
 function supportsWorkspace(instance: Instance) {
   return instance.type === "openclaw" || instance.type === "hermes" || Boolean(instance.workspace_path);
+}
+
+function isAttachedInstanceSkill(item: InstanceSkill) {
+  return item.status.trim().toLowerCase() !== "removed" && !item.removed_at;
 }
 
 function getErrorMessage(err: unknown, fallback: string) {
@@ -311,7 +316,10 @@ const InstanceDetailPage: React.FC = () => {
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [instanceSkills, setInstanceSkills] = useState<InstanceSkill[]>([]);
   const [availableSkills, setAvailableSkills] = useState<Skill[]>([]);
-  const [selectedSkillId, setSelectedSkillId] = useState<number | "">("");
+  const [skillInventorySummary, setSkillInventorySummary] = useState({ total: 0, hiddenByRisk: 0 });
+  const [selectedSkillIds, setSelectedSkillIds] = useState<number[]>([]);
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+  const skillPickerRef = useRef<HTMLDivElement | null>(null);
   const [skillLoading, setSkillLoading] = useState(false);
   const [skillError, setSkillError] = useState<string | null>(null);
   const [desktopStreamProfile, setDesktopStreamProfile] =
@@ -376,17 +384,24 @@ const InstanceDetailPage: React.FC = () => {
         skillService.listInstanceSkills(targetInstanceId),
         skillService.listSkills(),
       ]);
-      const attachedIds = new Set(attached.map((item) => item.skill_id));
-      setInstanceSkills(attached);
-      setAvailableSkills(
-        reusable.filter(
-          (skill) =>
-            skill.status === "active" &&
-            !attachedIds.has(skill.id) &&
-            skill.risk_level !== "medium" &&
-            skill.risk_level !== "high",
-        ),
+      const activeAttached = attached.filter(isAttachedInstanceSkill);
+      const attachedIds = new Set(activeAttached.map((item) => item.skill_id));
+      const activeReusableSkills = reusable.filter((skill) => skill.status === "active");
+      const riskAllowedSkills = activeReusableSkills.filter(
+        (skill) => !["medium", "high"].includes(skill.risk_level.trim().toLowerCase()),
       );
+      setInstanceSkills(activeAttached);
+      setSkillInventorySummary({
+        total: activeReusableSkills.length,
+        hiddenByRisk: activeReusableSkills.length - riskAllowedSkills.length,
+      });
+      const attachableSkills = riskAllowedSkills.filter((skill) => !attachedIds.has(skill.id));
+      const attachableSkillIds = new Set(attachableSkills.map((skill) => skill.id));
+      setAvailableSkills(attachableSkills);
+      setSelectedSkillIds((current) => current.filter((skillId) => attachableSkillIds.has(skillId)));
+      if (attachableSkills.length === 0) {
+        setSkillPickerOpen(false);
+      }
       setSkillError(null);
     } catch (err: unknown) {
       setSkillError(getErrorMessage(err, "Failed to load skills"));
@@ -454,12 +469,27 @@ const InstanceDetailPage: React.FC = () => {
   );
 
   useEffect(() => {
+    if (!skillPickerOpen) {
+      return undefined;
+    }
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!skillPickerRef.current?.contains(event.target as Node)) {
+        setSkillPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [skillPickerOpen]);
+
+  useEffect(() => {
     if (!instanceId || Number.isNaN(instanceId) || !isDedicatedInstance) {
       setRuntimeDetails(null);
       setRuntimeError(null);
       setInstanceSkills([]);
       setAvailableSkills([]);
-      setSelectedSkillId("");
+      setSkillInventorySummary({ total: 0, hiddenByRisk: 0 });
+      setSelectedSkillIds([]);
+      setSkillPickerOpen(false);
       return;
     }
     void fetchRuntimeDetails(instanceId);
@@ -661,21 +691,34 @@ const InstanceDetailPage: React.FC = () => {
     }
   };
 
-  const attachSelectedSkill = async () => {
-    if (!instance || selectedSkillId === "") {
+  const attachSelectedSkills = async () => {
+    if (!instance || selectedSkillIds.length === 0) {
+      return;
+    }
+    const skillOptionIds = new Set(skillOptions.map((skill) => skill.id));
+    const skillIds = selectedSkillIds.filter((skillId) => skillOptionIds.has(skillId));
+    if (skillIds.length === 0) {
+      setSelectedSkillIds([]);
       return;
     }
     try {
       setSkillLoading(true);
       setSkillError(null);
-      await skillService.attachSkillToInstance(instance.id, selectedSkillId);
-      setSelectedSkillId("");
+      await Promise.all(skillIds.map((skillId) => skillService.attachSkillToInstance(instance.id, skillId)));
+      setSelectedSkillIds([]);
+      setSkillPickerOpen(false);
       await fetchSkills(instance.id);
     } catch (err: unknown) {
       setSkillError(getErrorMessage(err, "Failed to attach skill"));
     } finally {
       setSkillLoading(false);
     }
+  };
+
+  const toggleSelectedSkill = (skillId: number) => {
+    setSelectedSkillIds((current) =>
+      current.includes(skillId) ? current.filter((item) => item !== skillId) : [...current, skillId],
+    );
   };
 
   const removeInstanceSkill = async (skillId: number) => {
@@ -686,6 +729,7 @@ const InstanceDetailPage: React.FC = () => {
       setSkillLoading(true);
       setSkillError(null);
       await skillService.removeSkillFromInstance(instance.id, skillId);
+      setInstanceSkills((current) => current.filter((item) => item.skill_id !== skillId));
       await fetchSkills(instance.id);
     } catch (err: unknown) {
       setSkillError(getErrorMessage(err, "Failed to remove skill"));
@@ -1014,7 +1058,7 @@ const InstanceDetailPage: React.FC = () => {
           availability={availability}
         />
         {supportsWorkspace(instance) ? (
-          <WorkspaceFileManager instanceId={instance.id} />
+          <WorkspaceFileManager instanceId={instance.id} onMutation={() => fetchSkills(instance.id)} />
         ) : (
           <div className="cm-surface flex h-full min-h-[420px] items-center justify-center text-sm text-slate-500 xl:min-h-0">
             No workspace
@@ -1033,6 +1077,11 @@ const InstanceDetailPage: React.FC = () => {
   });
   const attachedSkillIds = new Set(instanceSkills.map((item) => item.skill_id));
   const skillOptions = availableSkills.filter((skill) => !attachedSkillIds.has(skill.id));
+  const selectedSkillIdSet = new Set(selectedSkillIds);
+  const skillPickerLabel = selectedSkillIds.length > 0 ? `${selectedSkillIds.length} selected` : "Select skills";
+  const skillRiskPolicySummary = locale.startsWith("zh")
+    ? `\u5b89\u5168\u7b56\u7565\u5df2\u9690\u85cf ${skillInventorySummary.hiddenByRisk} \u4e2a\u4e2d/\u9ad8\u98ce\u9669\u6280\u80fd\uff1b\u5f53\u524d\u53ef\u6dfb\u52a0 ${skillOptions.length} \u4e2a\u3002`
+    : `Risk policy hid ${skillInventorySummary.hiddenByRisk} medium/high-risk skills; ${skillOptions.length} can still be added.`;
   const desktopStreamDirty = desktopStreamProfile !== desktopStreamSavedProfile;
   const restartActionActive = actionLoading === "restart" || actionLoading === "desktop-stream-restart";
 
@@ -1072,7 +1121,7 @@ const InstanceDetailPage: React.FC = () => {
 
         {supportsWorkspace(instance) ? (
           <div className="min-h-[420px] min-w-0 xl:h-full xl:min-h-0">
-            <WorkspaceFileManager instanceId={instance.id} initialPath="/config" />
+            <WorkspaceFileManager instanceId={instance.id} initialPath="/config" onMutation={() => fetchSkills(instance.id)} />
           </div>
         ) : (
           <div className="cm-surface flex min-h-[420px] items-center justify-center text-sm text-slate-500 xl:min-h-0">
@@ -1158,31 +1207,56 @@ const InstanceDetailPage: React.FC = () => {
             </div>
           </div>
           {skillError && <div className="mb-3 text-xs text-red-600">{skillError}</div>}
-          <div className="mb-3 flex gap-2">
-            <select
-              value={selectedSkillId}
-              onChange={(event) =>
-                setSelectedSkillId(event.target.value ? Number(event.target.value) : "")
-              }
-              className="min-w-0 flex-1 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
-              disabled={skillLoading}
-              aria-label="Attach skill"
-            >
-              <option value="">Select a skill</option>
-              {skillOptions.map((skill) => (
-                <option key={skill.id} value={skill.id}>
-                  {skill.name}
-                </option>
-              ))}
-            </select>
+          {skillInventorySummary.hiddenByRisk > 0 && (
+            <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {skillRiskPolicySummary}
+            </div>
+          )}
+          <div ref={skillPickerRef} className="mb-3 flex gap-2">
+            <div className="relative min-w-0 flex-1">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 outline-none transition hover:border-indigo-200 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400"
+                disabled={skillLoading || skillOptions.length === 0}
+                aria-haspopup="listbox"
+                aria-expanded={skillPickerOpen}
+                data-skill-picker="multi-select"
+                onClick={() => setSkillPickerOpen((open) => !open)}
+              >
+                <span className="min-w-0 truncate">{skillOptions.length === 0 ? "No available skills" : skillPickerLabel}</span>
+                <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition ${skillPickerOpen ? "rotate-180" : ""}`} />
+              </button>
+              {skillPickerOpen && (
+                <div className="absolute left-0 right-0 z-30 mt-1 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg">
+                  <div className="max-h-64 divide-y divide-slate-100 overflow-y-auto py-1" role="listbox" aria-multiselectable="true">
+                    {skillOptions.map((skill) => (
+                      <label
+                        key={skill.id}
+                        className="flex min-h-10 cursor-pointer items-center gap-3 px-3 py-2 text-sm text-slate-800 transition hover:bg-slate-50"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedSkillIdSet.has(skill.id)}
+                          onChange={() => toggleSelectedSkill(skill.id)}
+                          disabled={skillLoading}
+                          className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="min-w-0 truncate">{skill.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className="app-button-secondary"
-              disabled={skillLoading || selectedSkillId === ""}
-              onClick={() => void attachSelectedSkill()}
-              title="Attach skill"
+              disabled={skillLoading || selectedSkillIds.length === 0}
+              onClick={() => void attachSelectedSkills()}
+              title={selectedSkillIds.length > 0 ? `Attach ${selectedSkillIds.length} skills` : "Attach selected skills"}
             >
               <Plus className="h-4 w-4" />
+              {selectedSkillIds.length > 0 && <span className="text-xs">{selectedSkillIds.length}</span>}
             </button>
           </div>
           <div className="max-h-[260px] overflow-y-auto pr-1">

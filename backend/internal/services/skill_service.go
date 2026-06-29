@@ -374,12 +374,18 @@ func (s *skillService) ListVersions(userID, skillID int) ([]SkillVersionPayload,
 }
 
 func (s *skillService) ListInstanceSkills(instanceID int) ([]InstanceSkillPayload, error) {
+	if err := s.reconcileRemovedInstanceSkillsFromCommands(instanceID); err != nil {
+		return nil, err
+	}
 	items, err := s.repo.ListInstanceSkills(instanceID)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]InstanceSkillPayload, 0, len(items))
 	for _, item := range items {
+		if isRemovedInstanceSkill(&item) {
+			continue
+		}
 		payload := InstanceSkillPayload{
 			ID: item.ID, InstanceID: item.InstanceID, SkillID: item.SkillID, SkillVersionID: item.SkillVersionID,
 			SourceType: item.SourceType, InstallPath: item.InstallPath, ObservedHash: item.ObservedHash,
@@ -401,6 +407,42 @@ func (s *skillService) ListInstanceSkills(instanceID int) ([]InstanceSkillPayloa
 	return result, nil
 }
 
+func (s *skillService) reconcileRemovedInstanceSkillsFromCommands(instanceID int) error {
+	if s.commandService == nil {
+		return nil
+	}
+	commands, err := s.commandService.ListByInstanceID(instanceID, 500)
+	if err != nil {
+		return err
+	}
+	for _, command := range commands {
+		if command.CommandType != InstanceCommandTypeUninstallSkill || command.Status != instanceCommandStatusSucceeded {
+			continue
+		}
+		if skillID, ok := intPayloadValue(command.Payload["skill_id"]); ok {
+			if err := s.repo.MarkInstanceSkillRemoved(instanceID, skillID, commandFinishedAt(command)); err != nil {
+				return err
+			}
+		}
+		if skillKey, ok := stringPayloadValue(command.Payload["target_name"]); ok {
+			if err := s.repo.MarkInstanceSkillRemovedBySkillKey(instanceID, skillKey, commandFinishedAt(command)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func commandFinishedAt(command InstanceCommandPayload) time.Time {
+	if command.FinishedAt != nil && !command.FinishedAt.IsZero() {
+		return *command.FinishedAt
+	}
+	if !command.IssuedAt.IsZero() {
+		return command.IssuedAt
+	}
+	return time.Time{}
+}
+
 func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*InstanceSkillPayload, error) {
 	skill, err := s.repo.GetSkillByID(skillID)
 	if err != nil {
@@ -415,7 +457,7 @@ func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*Inst
 	if skill.Status != "active" {
 		return nil, fmt.Errorf("skill is not active")
 	}
-	if skill.RiskLevel == skillRiskMedium || skill.RiskLevel == skillRiskHigh {
+	if isBlockedSkillRisk(skill.RiskLevel) {
 		return nil, fmt.Errorf("skill is blocked by risk policy")
 	}
 	versionID := skill.CurrentVersionID
@@ -436,7 +478,7 @@ func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*Inst
 		if err != nil {
 			return nil, err
 		}
-		_, _ = s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
+		if _, err := s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
 			CommandType: InstanceCommandTypeInstallSkill,
 			Payload: map[string]interface{}{
 				"skill_id":      formatExternalSkillID(skillID),
@@ -444,9 +486,11 @@ func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*Inst
 				"target_name":   skill.SkillKey,
 				"content_md5":   s.resolveContentMD5(blob),
 			},
-			IdempotencyKey: fmt.Sprintf("install-skill-%d-%d", instanceID, skillID),
+			IdempotencyKey: fmt.Sprintf("install-skill-%d-%d-%d", instanceID, skillID, now.UnixNano()),
 			TimeoutSeconds: 300,
-		})
+		}); err != nil {
+			return nil, fmt.Errorf("failed to queue install skill command: %w", err)
+		}
 	}
 	items, err := s.ListInstanceSkills(instanceID)
 	if err != nil {
@@ -475,13 +519,24 @@ func (s *skillService) RemoveSkillFromInstance(instanceID int, skillID int) erro
 	if err := s.repo.UpsertInstanceSkill(item); err != nil {
 		return err
 	}
-	_, _ = s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
+	if _, err := s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
 		CommandType:    InstanceCommandTypeUninstallSkill,
-		Payload:        map[string]interface{}{"target_name": skillKeyForRemoval(item)},
-		IdempotencyKey: fmt.Sprintf("remove-skill-%d-%d", instanceID, skillID),
+		Payload:        map[string]interface{}{"skill_id": skillID, "target_name": skillKeyForRemoval(item)},
+		IdempotencyKey: fmt.Sprintf("remove-skill-%d-%d-%d", instanceID, skillID, now.UnixNano()),
 		TimeoutSeconds: 300,
-	})
+	}); err != nil {
+		return fmt.Errorf("failed to queue uninstall skill command: %w", err)
+	}
 	return nil
+}
+
+func isBlockedSkillRisk(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.EqualFold(value, skillRiskMedium) || strings.EqualFold(value, skillRiskHigh)
+}
+
+func isRemovedInstanceSkill(item *models.InstanceSkill) bool {
+	return item != nil && (strings.EqualFold(strings.TrimSpace(item.Status), "removed") || item.RemovedAt != nil)
 }
 
 func (s *skillService) SyncAgentSkills(instanceID int, req AgentSkillInventoryReportRequest) error {
@@ -618,6 +673,14 @@ func (s *skillService) SyncAgentSkills(instanceID int, req AgentSkillInventoryRe
 				return err
 			}
 		}
+		existingInstanceSkill, err := s.repo.GetInstanceSkill(instanceID, skill.ID)
+		if err != nil {
+			return err
+		}
+		if isRemovedInstanceSkill(existingInstanceSkill) {
+			continue
+		}
+
 		active = append(active, skill.ID)
 		instanceSkill := &models.InstanceSkill{
 			InstanceID: instanceID, SkillID: skill.ID, SkillVersionID: optionalVersionID(version), SourceType: normalizedSource,

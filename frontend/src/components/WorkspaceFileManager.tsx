@@ -20,6 +20,7 @@ import type { WorkspaceEntry, WorkspacePreview } from "../types/workspace";
 interface WorkspaceFileManagerProps {
   instanceId: number;
   initialPath?: string;
+  onMutation?: () => void | Promise<void>;
 }
 
 const invalidNamePattern = /[\\/]/;
@@ -167,7 +168,7 @@ function EntryIcon({ entry }: { entry: WorkspaceEntry }) {
   return <File className="h-4 w-4 text-slate-500" />;
 }
 
-export function WorkspaceFileManager({ instanceId, initialPath }: WorkspaceFileManagerProps) {
+export function WorkspaceFileManager({ instanceId, initialPath, onMutation }: WorkspaceFileManagerProps) {
   const queryClient = useQueryClient();
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const folderUploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -269,6 +270,10 @@ export function WorkspaceFileManager({ instanceId, initialPath }: WorkspaceFileM
     });
   };
 
+  const notifyMutation = async () => {
+    await onMutation?.();
+  };
+
   const runAction = async (key: string, action: () => Promise<void>) => {
     try {
       setBusyAction(key);
@@ -302,6 +307,7 @@ export function WorkspaceFileManager({ instanceId, initialPath }: WorkspaceFileM
         await workspaceService.upload(instanceId, currentPath, file);
       }
       await invalidateCurrentPath();
+      await notifyMutation();
       clearUploadInputs();
     });
   };
@@ -333,6 +339,7 @@ export function WorkspaceFileManager({ instanceId, initialPath }: WorkspaceFileM
         await workspaceService.upload(instanceId, joinPath(currentPath, parentPath(relativePath)), file);
       }
       await invalidateCurrentPath();
+      await notifyMutation();
       clearUploadInputs();
     });
   };
@@ -355,6 +362,7 @@ export function WorkspaceFileManager({ instanceId, initialPath }: WorkspaceFileM
     void runAction("mkdir", async () => {
       await workspaceService.mkdir(instanceId, joinPath(currentPath, name));
       await invalidateCurrentPath();
+      await notifyMutation();
     });
   };
 
@@ -369,6 +377,7 @@ export function WorkspaceFileManager({ instanceId, initialPath }: WorkspaceFileM
         setPreviewPath(null);
       }
       await invalidateCurrentPath();
+      await notifyMutation();
     });
   };
 
@@ -382,6 +391,7 @@ export function WorkspaceFileManager({ instanceId, initialPath }: WorkspaceFileM
         setPreviewPath(null);
       }
       await invalidateCurrentPath();
+      await notifyMutation();
     });
   };
 
