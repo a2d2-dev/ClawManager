@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -156,6 +158,7 @@ type SkillService interface {
 	ImportArchive(ctx context.Context, userID int, fileHeader *multipart.FileHeader) ([]SkillPayload, error)
 	ListSkills(userID int) ([]SkillPayload, error)
 	ListAllSkills() ([]SkillPayload, error)
+	ListAvailableSkillsForInstance(instanceID int, userID int, userRole string) ([]SkillPayload, error)
 	GetSkill(userID, skillID int) (*SkillPayload, error)
 	UpdateSkill(userID, skillID int, req UpdateSkillRequest) (*SkillPayload, error)
 	DeleteSkill(userID, skillID int) error
@@ -164,6 +167,7 @@ type SkillService interface {
 	ListVersions(userID, skillID int) ([]SkillVersionPayload, error)
 	ListInstanceSkills(instanceID int) ([]InstanceSkillPayload, error)
 	AttachSkillToInstance(instanceID int, skillID int) (*InstanceSkillPayload, error)
+	AttachSkillToInstanceForActor(instanceID int, skillID int, userID int, userRole string) (*InstanceSkillPayload, error)
 	RemoveSkillFromInstance(instanceID int, skillID int) error
 	SyncAgentSkills(instanceID int, req AgentSkillInventoryReportRequest) error
 	UploadAgentSkillPackage(ctx context.Context, instanceID int, req AgentSkillPackageUploadRequest, fileHeader *multipart.FileHeader) (*SkillPayload, error)
@@ -237,6 +241,35 @@ func (s *skillService) ListAllSkills() ([]SkillPayload, error) {
 	return s.toSkillPayloads(items)
 }
 
+func (s *skillService) ListAvailableSkillsForInstance(instanceID int, userID int, userRole string) ([]SkillPayload, error) {
+	instance, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	if instance == nil {
+		return nil, fmt.Errorf("instance not found")
+	}
+	if !strings.EqualFold(userRole, "admin") && instance.UserID != userID {
+		return nil, fmt.Errorf("access denied")
+	}
+
+	items, err := s.repo.ListAllSkills()
+	if err != nil {
+		return nil, err
+	}
+
+	filtered := make([]models.Skill, 0, len(items))
+	for _, item := range items {
+		if !isUserManagedSkill(item) || !strings.EqualFold(item.Status, "active") {
+			continue
+		}
+		if !canActorAttachSkillToInstance(instance, item, userID, userRole) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return s.toSkillPayloads(filtered)
+}
 func (s *skillService) GetSkill(userID, skillID int) (*SkillPayload, error) {
 	item, err := s.repo.GetSkillByID(skillID)
 	if err != nil {
@@ -443,6 +476,24 @@ func commandFinishedAt(command InstanceCommandPayload) time.Time {
 	return time.Time{}
 }
 
+func (s *skillService) AttachSkillToInstanceForActor(instanceID int, skillID int, userID int, userRole string) (*InstanceSkillPayload, error) {
+	instance, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return nil, err
+	}
+	if instance == nil {
+		return nil, fmt.Errorf("instance not found")
+	}
+	skill, err := s.repo.GetSkillByID(skillID)
+	if err != nil {
+		return nil, err
+	}
+	if skill == nil || !canActorAttachSkillToInstance(instance, *skill, userID, userRole) {
+		return nil, fmt.Errorf("skill not found")
+	}
+	return s.attachSkillModelToInstance(instanceID, skill)
+}
+
 func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*InstanceSkillPayload, error) {
 	skill, err := s.repo.GetSkillByID(skillID)
 	if err != nil {
@@ -451,6 +502,10 @@ func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*Inst
 	if skill == nil {
 		return nil, fmt.Errorf("skill not found")
 	}
+	return s.attachSkillModelToInstance(instanceID, skill)
+}
+
+func (s *skillService) attachSkillModelToInstance(instanceID int, skill *models.Skill) (*InstanceSkillPayload, error) {
 	if !isUserManagedSkill(*skill) {
 		return nil, fmt.Errorf("skill not found")
 	}
@@ -460,7 +515,24 @@ func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*Inst
 	if isBlockedSkillRisk(skill.RiskLevel) {
 		return nil, fmt.Errorf("skill is blocked by risk policy")
 	}
+
+	skillID := skill.ID
 	versionID := skill.CurrentVersionID
+	var blob *models.SkillBlob
+	if versionID != nil {
+		version, err := s.repo.GetVersionByID(*versionID)
+		if err != nil {
+			return nil, err
+		}
+		blob, err = s.repo.GetBlobByID(version.BlobID)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.materializeLiteInstanceSkill(context.Background(), instanceID, skill, blob); err != nil {
+			return nil, err
+		}
+	}
+
 	now := time.Now().UTC()
 	item := &models.InstanceSkill{
 		InstanceID: instanceID, SkillID: skillID, SkillVersionID: versionID,
@@ -469,15 +541,7 @@ func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*Inst
 	if err := s.repo.UpsertInstanceSkill(item); err != nil {
 		return nil, err
 	}
-	if versionID != nil {
-		version, err := s.repo.GetVersionByID(*versionID)
-		if err != nil {
-			return nil, err
-		}
-		blob, err := s.repo.GetBlobByID(version.BlobID)
-		if err != nil {
-			return nil, err
-		}
+	if versionID != nil && blob != nil {
 		if _, err := s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
 			CommandType: InstanceCommandTypeInstallSkill,
 			Payload: map[string]interface{}{
@@ -504,6 +568,211 @@ func (s *skillService) AttachSkillToInstance(instanceID int, skillID int) (*Inst
 	return nil, fmt.Errorf("instance skill not found after attach")
 }
 
+func (s *skillService) materializeLiteInstanceSkill(ctx context.Context, instanceID int, skill *models.Skill, blob *models.SkillBlob) error {
+	if s == nil || s.instanceRepo == nil || s.storage == nil || skill == nil || blob == nil {
+		return nil
+	}
+	instance, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if !isLiteRuntimeInstance(instance) || instance.WorkspacePath == nil || strings.TrimSpace(*instance.WorkspacePath) == "" {
+		return nil
+	}
+
+	content, err := s.storage.GetObject(ctx, blob.ObjectKey)
+	if err != nil {
+		return fmt.Errorf("failed to load skill archive for lite materialization: %w", err)
+	}
+	dirs, err := extractSkillDirectories(blob.FileName, content)
+	if err != nil {
+		return fmt.Errorf("failed to read skill archive for lite materialization: %w", err)
+	}
+	if len(dirs) != 1 {
+		return fmt.Errorf("lite skill materialization requires exactly one skill directory")
+	}
+
+	targetName := sanitizeSkillKey(skill.SkillKey)
+	if targetName == "" {
+		targetName = sanitizeSkillKey(dirs[0].Name)
+	}
+	if targetName == "" {
+		return fmt.Errorf("lite skill materialization target is invalid")
+	}
+
+	targetRoot := liteSkillInstallRoot(instance)
+	if targetRoot == "" {
+		return nil
+	}
+	if err := writeSkillDirectoryAtomically(targetRoot, targetName, dirs[0].Files); err != nil {
+		return err
+	}
+	return ensureLiteRuntimePersistentOwnership(instance)
+}
+
+func liteSkillInstallRoot(instance *models.Instance) string {
+	if instance == nil || instance.WorkspacePath == nil || strings.TrimSpace(*instance.WorkspacePath) == "" {
+		return ""
+	}
+	workspacePath := filepath.Clean(strings.TrimSpace(*instance.WorkspacePath))
+	if strings.EqualFold(strings.TrimSpace(instance.Type), RuntimeTypeHermes) {
+		return filepath.Join(workspacePath, ".hermes", "skills")
+	}
+	return filepath.Join(workspacePath, "home", ".openclaw", "workspace", "skills")
+}
+
+func liteRuntimePersistentRoot(instance *models.Instance) string {
+	if instance == nil || instance.WorkspacePath == nil || strings.TrimSpace(*instance.WorkspacePath) == "" {
+		return ""
+	}
+	workspacePath := filepath.Clean(strings.TrimSpace(*instance.WorkspacePath))
+	if strings.EqualFold(strings.TrimSpace(instance.Type), RuntimeTypeHermes) {
+		return filepath.Join(workspacePath, ".hermes")
+	}
+	return filepath.Join(workspacePath, "home", ".openclaw")
+}
+
+func ensureLiteRuntimePersistentOwnership(instance *models.Instance) error {
+	if os.PathSeparator != '/' || instance == nil || instance.ID <= 0 || instance.WorkspacePath == nil {
+		return nil
+	}
+	workspacePath := filepath.Clean(strings.TrimSpace(*instance.WorkspacePath))
+	persistentRoot := liteRuntimePersistentRoot(instance)
+	if workspacePath == "" || persistentRoot == "" || !isPathWithin(workspacePath, persistentRoot) {
+		return nil
+	}
+
+	uid := RuntimeLinuxID(instance.ID)
+	gid := uid
+	for _, dir := range liteRuntimePersistentAncestors(workspacePath, persistentRoot) {
+		if err := chownRuntimePath(dir, uid, gid, 0750); err != nil {
+			return err
+		}
+	}
+	return filepath.WalkDir(persistentRoot, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !isPathWithin(workspacePath, current) {
+			return fmt.Errorf("lite runtime path escapes workspace: %s", current)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		mode := os.FileMode(0640)
+		if entry.IsDir() {
+			mode = 0750
+		}
+		return chownRuntimePath(current, uid, gid, mode)
+	})
+}
+
+func liteRuntimePersistentAncestors(workspacePath, persistentRoot string) []string {
+	workspacePath = filepath.Clean(workspacePath)
+	persistentRoot = filepath.Clean(persistentRoot)
+	result := []string{workspacePath}
+	rel, err := filepath.Rel(workspacePath, persistentRoot)
+	if err != nil || rel == "." || rel == "" || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return result
+	}
+	current := workspacePath
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		result = append(result, current)
+	}
+	return result
+}
+
+func chownRuntimePath(targetPath string, uid, gid int, mode os.FileMode) error {
+	if err := os.Chown(targetPath, uid, gid); err != nil {
+		return fmt.Errorf("failed to set lite runtime owner on %s: %w", targetPath, err)
+	}
+	if err := os.Chmod(targetPath, mode); err != nil {
+		return fmt.Errorf("failed to set lite runtime permissions on %s: %w", targetPath, err)
+	}
+	return nil
+}
+
+func writeSkillDirectoryAtomically(targetRoot, targetName string, files map[string][]byte) error {
+	targetRoot = filepath.Clean(strings.TrimSpace(targetRoot))
+	targetName = strings.TrimSpace(targetName)
+	if targetRoot == "." || targetRoot == "" || targetName == "" || strings.ContainsAny(targetName, `/\\`) {
+		return fmt.Errorf("invalid lite skill target")
+	}
+	if err := os.MkdirAll(targetRoot, 0750); err != nil {
+		return fmt.Errorf("failed to prepare lite skill root: %w", err)
+	}
+
+	tmpDir, err := os.MkdirTemp(targetRoot, ".tmp-skill-"+targetName+"-")
+	if err != nil {
+		return fmt.Errorf("failed to create lite skill temp dir: %w", err)
+	}
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
+
+	for relPath, body := range files {
+		clean := normalizeSkillRelPath(relPath)
+		if clean == "" || hasHiddenPathSegment(clean) {
+			continue
+		}
+		parts := strings.Split(clean, "/")
+		if len(parts) == 0 {
+			continue
+		}
+		entryPath := filepath.Join(append([]string{tmpDir}, parts...)...)
+		if !isPathWithin(tmpDir, entryPath) {
+			return fmt.Errorf("skill archive entry escapes target: %s", relPath)
+		}
+		if err := os.MkdirAll(filepath.Dir(entryPath), 0750); err != nil {
+			return fmt.Errorf("failed to prepare lite skill directory: %w", err)
+		}
+		if err := os.WriteFile(entryPath, body, 0640); err != nil {
+			return fmt.Errorf("failed to write lite skill file: %w", err)
+		}
+	}
+
+	targetPath := filepath.Join(targetRoot, targetName)
+	if !isPathWithin(targetRoot, targetPath) {
+		return fmt.Errorf("lite skill target escapes root")
+	}
+	backupPath := targetPath + ".old"
+	_ = os.RemoveAll(backupPath)
+	if _, err := os.Stat(targetPath); err == nil {
+		if err := os.Rename(targetPath, backupPath); err != nil {
+			return fmt.Errorf("failed to stage existing lite skill directory: %w", err)
+		}
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to inspect existing lite skill directory: %w", err)
+	}
+	if err := os.Rename(tmpDir, targetPath); err != nil {
+		if _, statErr := os.Stat(backupPath); statErr == nil {
+			_ = os.Rename(backupPath, targetPath)
+		}
+		return fmt.Errorf("failed to install lite skill directory: %w", err)
+	}
+	cleanupTmp = false
+	_ = os.RemoveAll(backupPath)
+	return nil
+}
+
+func isPathWithin(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	rel, err := filepath.Rel(root, target)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+}
+
 func (s *skillService) RemoveSkillFromInstance(instanceID int, skillID int) error {
 	item, err := s.repo.GetInstanceSkill(instanceID, skillID)
 	if err != nil {
@@ -511,6 +780,9 @@ func (s *skillService) RemoveSkillFromInstance(instanceID int, skillID int) erro
 	}
 	if item == nil {
 		return nil
+	}
+	if err := s.removeLiteInstanceSkillDirectory(instanceID, item); err != nil {
+		return err
 	}
 	now := time.Now().UTC()
 	item.Status = "removed"
@@ -530,6 +802,44 @@ func (s *skillService) RemoveSkillFromInstance(instanceID int, skillID int) erro
 	return nil
 }
 
+func (s *skillService) removeLiteInstanceSkillDirectory(instanceID int, item *models.InstanceSkill) error {
+	if s == nil || s.instanceRepo == nil || item == nil {
+		return nil
+	}
+	instance, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil {
+		return err
+	}
+	if !isLiteRuntimeInstance(instance) {
+		return nil
+	}
+	skillKey := strings.TrimSpace(skillKeyForRemoval(item))
+	if skillKey == "" || strings.HasPrefix(skillKey, "skill-") {
+		skill, err := s.repo.GetSkillByID(item.SkillID)
+		if err != nil {
+			return err
+		}
+		if skill != nil {
+			skillKey = strings.TrimSpace(skill.SkillKey)
+		}
+	}
+	targetName := sanitizeSkillKey(skillKey)
+	if targetName == "" {
+		return nil
+	}
+	targetRoot := liteSkillInstallRoot(instance)
+	if targetRoot == "" {
+		return nil
+	}
+	targetPath := filepath.Join(targetRoot, targetName)
+	if !isPathWithin(targetRoot, targetPath) {
+		return fmt.Errorf("lite skill removal target escapes root")
+	}
+	if err := os.RemoveAll(targetPath); err != nil {
+		return fmt.Errorf("failed to remove lite skill directory: %w", err)
+	}
+	return ensureLiteRuntimePersistentOwnership(instance)
+}
 func isBlockedSkillRisk(value string) bool {
 	value = strings.TrimSpace(value)
 	return strings.EqualFold(value, skillRiskMedium) || strings.EqualFold(value, skillRiskHigh)
@@ -1496,6 +1806,16 @@ func normalizeSkillSource(value string) string {
 		return "discovered_in_instance"
 	}
 	return value
+}
+
+func canActorAttachSkillToInstance(instance *models.Instance, skill models.Skill, userID int, userRole string) bool {
+	if instance == nil {
+		return false
+	}
+	if strings.EqualFold(userRole, "admin") {
+		return true
+	}
+	return instance.UserID == userID
 }
 
 func isUserManagedSkill(skill models.Skill) bool {

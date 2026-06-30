@@ -426,7 +426,7 @@ func (s *openClawConfigService) UpdateResource(userID, id int, req UpsertOpenCla
 	}
 
 	// Cascade: recompile active snapshots that reference this resource.
-	// Non-blocking — errors are logged but do not fail the update.
+	// Non-blocking: errors are logged but do not fail the update.
 	go s.cascadeSnapshotsForResource(userID, id)
 
 	payload, err := resourcePayloadFromModel(*item)
@@ -843,6 +843,11 @@ func (s *openClawConfigService) EnsureSnapshotSecret(ctx context.Context, userID
 		return "", nil
 	}
 
+	envValues, err := s.RuntimeEnvForSnapshot(userID, instance.Type, snapshotID)
+	if err != nil {
+		return "", err
+	}
+
 	snapshot, err := s.repo.GetSnapshotByID(snapshotID)
 	if err != nil {
 		return "", err
@@ -850,12 +855,6 @@ func (s *openClawConfigService) EnsureSnapshotSecret(ctx context.Context, userID
 	if snapshot == nil || snapshot.UserID != userID {
 		return "", fmt.Errorf("openclaw injection snapshot not found")
 	}
-
-	var envValues map[string]string
-	if err := json.Unmarshal([]byte(snapshot.RenderedEnvJSON), &envValues); err != nil {
-		return "", fmt.Errorf("openclaw injection snapshot env payload is invalid")
-	}
-	envValues = runtimeBootstrapEnvValues(instance.Type, envValues)
 
 	secretName := snapshot.SecretName
 	if secretName == nil || strings.TrimSpace(*secretName) == "" {
@@ -889,6 +888,25 @@ func (s *openClawConfigService) EnsureSnapshotSecret(ctx context.Context, userID
 	return *secretName, nil
 }
 
+func (s *openClawConfigService) RuntimeEnvForSnapshot(userID int, instanceType string, snapshotID int) (map[string]string, error) {
+	if s == nil || s.repo == nil || snapshotID <= 0 {
+		return map[string]string{}, nil
+	}
+
+	snapshot, err := s.repo.GetSnapshotByID(snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	if snapshot == nil || snapshot.UserID != userID {
+		return nil, fmt.Errorf("openclaw injection snapshot not found")
+	}
+
+	var envValues map[string]string
+	if err := json.Unmarshal([]byte(snapshot.RenderedEnvJSON), &envValues); err != nil {
+		return nil, fmt.Errorf("openclaw injection snapshot env payload is invalid")
+	}
+	return runtimeBootstrapEnvValues(instanceType, envValues), nil
+}
 func runtimeBootstrapEnvValues(instanceType string, envValues map[string]string) map[string]string {
 	result := map[string]string{}
 	for key, value := range envValues {
@@ -2212,7 +2230,7 @@ func errorString(err error) string {
 
 // cascadeSnapshotsForResource recompiles all active snapshots that reference
 // the given resource ID, so that their rendered_env_json reflects the latest
-// resource content. It does NOT restart instances — the new env takes effect
+// resource content. It does NOT restart instances; the new env takes effect
 // on the next instance restart.
 func (s *openClawConfigService) cascadeSnapshotsForResource(userID, resourceID int) {
 	snapshots, err := s.repo.ListActiveSnapshots(userID)
@@ -2267,7 +2285,7 @@ func (s *openClawConfigService) cascadeSnapshotsForResource(userID, resourceID i
 		if err != nil {
 			log.Printf("[cascade] snapshot %d: update failed: %v", snap.ID, err)
 		} else if !ok {
-			log.Printf("[cascade] snapshot %d: skipped — already updated by a newer cascade", snap.ID)
+			log.Printf("[cascade] snapshot %d: skipped; already updated by a newer cascade", snap.ID)
 		} else {
 			log.Printf("[cascade] snapshot %d: refreshed successfully", snap.ID)
 		}

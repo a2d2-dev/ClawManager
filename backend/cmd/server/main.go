@@ -375,6 +375,7 @@ func main() {
 			instances.PATCH("/:id/workspace/entries", workspaceFileHandler.Rename)
 			instances.DELETE("/:id/workspace/entries", workspaceFileHandler.Delete)
 			instances.GET("/:id/skills", skillHandler.ListInstanceSkills)
+			instances.GET("/:id/skills/available", skillHandler.ListAvailableInstanceSkills)
 			instances.POST("/:id/skills", skillHandler.AttachSkillToInstance)
 			instances.DELETE("/:id/skills/:skillId", skillHandler.RemoveSkillFromInstance)
 		}

@@ -3,12 +3,17 @@ package services
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
+
+	"clawreef/internal/models"
 )
 
 func TestHashDirectoryPreservesSingleTopLevelSubdirectory(t *testing.T) {
@@ -150,6 +155,115 @@ func TestFlattenSingleTopLevelDirForArchiveRoot(t *testing.T) {
 	})
 	if got != want {
 		t.Fatalf("hashDirectory(flattenSingleTopLevelDir(files)) = %s, want %s", got, want)
+	}
+}
+
+func TestMaterializeLiteInstanceSkillWritesOpenClawWorkspaceSkill(t *testing.T) {
+	archive := buildTestZip(t, map[string][]byte{
+		"paper-ranker/SKILL.md":      []byte("# Paper Ranker\n"),
+		"paper-ranker/src/rank.py":   []byte("print('rank')\n"),
+		"paper-ranker/.ignored-file": []byte("local secret\n"),
+	})
+	workspacePath := filepath.Join(t.TempDir(), "openclaw", "user-45", "instance-77")
+	if err := os.MkdirAll(workspacePath, 0750); err != nil {
+		t.Fatalf("MkdirAll(workspacePath): %v", err)
+	}
+
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[77] = &models.Instance{
+		ID:            0,
+		UserID:        45,
+		Type:          RuntimeTypeOpenClaw,
+		RuntimeType:   RuntimeBackendGateway,
+		InstanceMode:  InstanceModeLite,
+		WorkspacePath: &workspacePath,
+	}
+	service := &skillService{
+		instanceRepo: instanceRepo,
+		storage:      fakeObjectStorage{"skills/paper-ranker.zip": archive},
+	}
+
+	err := service.materializeLiteInstanceSkill(context.Background(), 77, &models.Skill{
+		SkillKey: "paper-ranker",
+	}, &models.SkillBlob{
+		ObjectKey: "skills/paper-ranker.zip",
+		FileName:  "paper-ranker.zip",
+	})
+	if err != nil {
+		t.Fatalf("materializeLiteInstanceSkill() error = %v", err)
+	}
+
+	target := filepath.Join(workspacePath, "home", ".openclaw", "workspace", "skills", "paper-ranker")
+	assertFileEquals(t, filepath.Join(target, "SKILL.md"), "# Paper Ranker\n")
+	assertFileEquals(t, filepath.Join(target, "src", "rank.py"), "print('rank')\n")
+	if _, err := os.Stat(filepath.Join(target, ".ignored-file")); !os.IsNotExist(err) {
+		t.Fatalf("hidden archive entry was materialized, stat err = %v", err)
+	}
+}
+
+func TestRemoveLiteInstanceSkillDeletesOpenClawWorkspaceSkill(t *testing.T) {
+	workspacePath := filepath.Join(t.TempDir(), "openclaw", "user-45", "instance-77")
+	target := filepath.Join(workspacePath, "home", ".openclaw", "workspace", "skills", "paper-ranker")
+	if err := os.MkdirAll(target, 0750); err != nil {
+		t.Fatalf("MkdirAll(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("# Paper Ranker\n"), 0640); err != nil {
+		t.Fatalf("WriteFile(SKILL.md): %v", err)
+	}
+
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[77] = &models.Instance{
+		ID:            77,
+		UserID:        45,
+		Type:          RuntimeTypeOpenClaw,
+		RuntimeType:   RuntimeBackendGateway,
+		InstanceMode:  InstanceModeLite,
+		WorkspacePath: &workspacePath,
+	}
+	installPath := "home/.openclaw/workspace/skills/paper-ranker"
+	service := &skillService{instanceRepo: instanceRepo}
+
+	if err := service.removeLiteInstanceSkillDirectory(77, &models.InstanceSkill{SkillID: 12, InstallPath: &installPath}); err != nil {
+		t.Fatalf("removeLiteInstanceSkillDirectory() error = %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected skill directory to be removed, stat err = %v", err)
+	}
+}
+func TestLiteRuntimePersistentAncestorsIncludeOpenClawHome(t *testing.T) {
+	workspacePath := filepath.Join(t.TempDir(), "openclaw", "user-1", "instance-89")
+	persistentRoot := filepath.Join(workspacePath, "home", ".openclaw")
+
+	got := liteRuntimePersistentAncestors(workspacePath, persistentRoot)
+	want := []string{
+		workspacePath,
+		filepath.Join(workspacePath, "home"),
+		filepath.Join(workspacePath, "home", ".openclaw"),
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("liteRuntimePersistentAncestors() = %#v, want %#v", got, want)
+	}
+}
+
+type fakeObjectStorage map[string][]byte
+
+func (f fakeObjectStorage) PutObject(context.Context, string, []byte, string) error {
+	return nil
+}
+
+func (f fakeObjectStorage) GetObject(_ context.Context, objectKey string) ([]byte, error) {
+	return f[objectKey], nil
+}
+
+func assertFileEquals(t *testing.T, filePath string, want string) {
+	t.Helper()
+
+	body, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", filePath, err)
+	}
+	if got := string(body); got != want {
+		t.Fatalf("ReadFile(%q) = %q, want %q", filePath, got, want)
 	}
 }
 
