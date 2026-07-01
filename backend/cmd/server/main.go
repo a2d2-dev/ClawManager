@@ -344,6 +344,8 @@ func main() {
 		{
 			instances.GET("", instanceHandler.ListInstances)
 			instances.POST("", instanceHandler.CreateInstance)
+			instances.POST("/batch/lite", instanceHandler.BatchCreateLiteInstances)
+			instances.POST("/batch/delete", instanceHandler.BatchDeleteLiteInstances)
 			instances.GET("/:id", instanceHandler.GetInstance)
 			instances.PUT("/:id", instanceHandler.UpdateInstance)
 			instances.DELETE("/:id", instanceHandler.DeleteInstance)

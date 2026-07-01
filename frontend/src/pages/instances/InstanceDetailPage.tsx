@@ -112,6 +112,17 @@ function supportsWorkspace(instance: Instance) {
   return instance.type === "openclaw" || instance.type === "hermes" || Boolean(instance.workspace_path);
 }
 
+function workspaceInitialPath(instance: Instance, isDedicated: boolean) {
+  const type = instance.type.trim().toLowerCase();
+  if (type === "hermes") {
+    return isDedicated ? ".hermes" : "home/.hermes";
+  }
+  if (type === "openclaw" && !isDedicated) {
+    return "home/.openclaw";
+  }
+  return isDedicated ? "/config" : undefined;
+}
+
 function isUsableSkillStatus(skill: Skill) {
   const status = skill.status.trim().toLowerCase();
   return status === "" || status === "active" || status === "enabled";
@@ -1279,6 +1290,7 @@ const InstanceDetailPage: React.FC = () => {
           <div className="min-h-[420px] min-w-0 overflow-hidden xl:min-h-0" style={desktopFrameHeight ? { height: desktopFrameHeight } : undefined}>
             <WorkspaceFileManager
               instanceId={instance.id}
+              initialPath={workspaceInitialPath(instance, isDedicatedInstance)}
               onMutation={() => fetchSkills(instance.id)}
               refreshKey={workspaceRefreshKey}
             />
@@ -1354,7 +1366,7 @@ const InstanceDetailPage: React.FC = () => {
           <div className="min-h-[420px] min-w-0 overflow-hidden xl:min-h-0" style={desktopFrameHeight ? { height: desktopFrameHeight } : undefined}>
             <WorkspaceFileManager
               instanceId={instance.id}
-              initialPath="/config"
+              initialPath={workspaceInitialPath(instance, isDedicatedInstance)}
               onMutation={() => fetchSkills(instance.id)}
               refreshKey={workspaceRefreshKey}
             />

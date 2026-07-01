@@ -1150,7 +1150,7 @@ func managedRuntimePersistentDir(instance *models.Instance) string {
 	if isLiteRuntimeInstance(instance) && instance.WorkspacePath != nil && strings.TrimSpace(*instance.WorkspacePath) != "" {
 		workspacePath := strings.TrimSpace(*instance.WorkspacePath)
 		if strings.EqualFold(instance.Type, "hermes") {
-			return path.Join(workspacePath, ".hermes")
+			return path.Join(workspacePath, "home", ".hermes")
 		}
 		return path.Join(workspacePath, "home", ".openclaw")
 	}

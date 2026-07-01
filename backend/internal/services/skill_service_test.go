@@ -201,6 +201,62 @@ func TestMaterializeLiteInstanceSkillWritesOpenClawWorkspaceSkill(t *testing.T) 
 	}
 }
 
+func TestMaterializeLiteInstanceSkillWritesHermesHomeSkill(t *testing.T) {
+	archive := buildTestZip(t, map[string][]byte{
+		"paper-ranker/SKILL.md": []byte("# Paper Ranker\n"),
+	})
+	workspacePath := filepath.Join(t.TempDir(), "hermes", "user-45", "instance-90")
+	if err := os.MkdirAll(workspacePath, 0750); err != nil {
+		t.Fatalf("MkdirAll(workspacePath): %v", err)
+	}
+
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[90] = &models.Instance{
+		ID:            90,
+		UserID:        45,
+		Type:          RuntimeTypeHermes,
+		RuntimeType:   RuntimeBackendGateway,
+		InstanceMode:  InstanceModeLite,
+		WorkspacePath: &workspacePath,
+	}
+	service := &skillService{
+		instanceRepo: instanceRepo,
+		storage:      fakeObjectStorage{"skills/paper-ranker.zip": archive},
+	}
+
+	err := service.materializeLiteInstanceSkill(context.Background(), 90, &models.Skill{
+		SkillKey: "paper-ranker",
+	}, &models.SkillBlob{
+		ObjectKey: "skills/paper-ranker.zip",
+		FileName:  "paper-ranker.zip",
+	})
+	if err != nil {
+		t.Fatalf("materializeLiteInstanceSkill() error = %v", err)
+	}
+
+	target := filepath.Join(workspacePath, "home", ".hermes", "skills", "paper-ranker")
+	assertFileEquals(t, filepath.Join(target, "SKILL.md"), "# Paper Ranker\n")
+}
+func TestWriteSkillDirectoryAtomicallyUsesNestedTempRoot(t *testing.T) {
+	targetRoot := t.TempDir()
+	err := writeSkillDirectoryAtomically(targetRoot, "marker-pdf-ingest", map[string][]byte{
+		"SKILL.md":              []byte("# Marker PDF Ingest\n"),
+		"scripts/parse_pdf.py":  []byte("print('parse')\n"),
+		"scripts/helpers/io.py": []byte("print('io')\n"),
+	})
+	if err != nil {
+		t.Fatalf("writeSkillDirectoryAtomically() error = %v", err)
+	}
+
+	target := filepath.Join(targetRoot, "marker-pdf-ingest")
+	assertFileEquals(t, filepath.Join(target, "scripts", "parse_pdf.py"), "print('parse')\n")
+	if _, err := os.Stat(filepath.Join(targetRoot, ".tmp-skill-marker-pdf-ingest")); !os.IsNotExist(err) {
+		t.Fatalf("temporary skill directory leaked at root, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetRoot, ".tmp")); err != nil {
+		t.Fatalf("expected nested temporary root to remain available, stat err = %v", err)
+	}
+}
 func TestRemoveLiteInstanceSkillDeletesOpenClawWorkspaceSkill(t *testing.T) {
 	workspacePath := filepath.Join(t.TempDir(), "openclaw", "user-45", "instance-77")
 	target := filepath.Join(workspacePath, "home", ".openclaw", "workspace", "skills", "paper-ranker")
@@ -224,6 +280,35 @@ func TestRemoveLiteInstanceSkillDeletesOpenClawWorkspaceSkill(t *testing.T) {
 	service := &skillService{instanceRepo: instanceRepo}
 
 	if err := service.removeLiteInstanceSkillDirectory(77, &models.InstanceSkill{SkillID: 12, InstallPath: &installPath}); err != nil {
+		t.Fatalf("removeLiteInstanceSkillDirectory() error = %v", err)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("expected skill directory to be removed, stat err = %v", err)
+	}
+}
+func TestRemoveLiteInstanceSkillDeletesHermesHomeSkill(t *testing.T) {
+	workspacePath := filepath.Join(t.TempDir(), "hermes", "user-45", "instance-90")
+	target := filepath.Join(workspacePath, "home", ".hermes", "skills", "paper-ranker")
+	if err := os.MkdirAll(target, 0750); err != nil {
+		t.Fatalf("MkdirAll(target): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "SKILL.md"), []byte("# Paper Ranker\n"), 0640); err != nil {
+		t.Fatalf("WriteFile(SKILL.md): %v", err)
+	}
+
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[90] = &models.Instance{
+		ID:            90,
+		UserID:        45,
+		Type:          RuntimeTypeHermes,
+		RuntimeType:   RuntimeBackendGateway,
+		InstanceMode:  InstanceModeLite,
+		WorkspacePath: &workspacePath,
+	}
+	installPath := "home/.hermes/skills/paper-ranker"
+	service := &skillService{instanceRepo: instanceRepo}
+
+	if err := service.removeLiteInstanceSkillDirectory(90, &models.InstanceSkill{SkillID: 12, InstallPath: &installPath}); err != nil {
 		t.Fatalf("removeLiteInstanceSkillDirectory() error = %v", err)
 	}
 	if _, err := os.Stat(target); !os.IsNotExist(err) {

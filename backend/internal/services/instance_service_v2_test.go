@@ -159,6 +159,38 @@ func TestBuildGatewayEnvInjectsLiteAgentAndBootstrapEnv(t *testing.T) {
 		t.Fatalf("expected bootstrap skill env to be injected, got %q", env[OpenClawSkillsEnv])
 	}
 }
+func TestBuildGatewayEnvInjectsHermesLitePersistentDir(t *testing.T) {
+	t.Setenv("CLAWMANAGER_LLM_GATEWAY_BASE_URL", "http://gateway.example/api/v1/gateway/llm")
+	t.Setenv("CLAWMANAGER_AGENT_CONTROL_BASE_URL", "http://agent-control.example")
+
+	accessToken := "igt_test_token"
+	agentToken := "agt_boot_test_token"
+	workspacePath := "/workspaces/hermes/user-45/instance-90"
+	service := &instanceService{
+		llmModelRepo:          &stubLLMModelRepository{active: []models.LLMModel{{DisplayName: "auto"}}},
+		openClawConfigService: &liteOpenClawConfigStub{},
+	}
+
+	env, err := service.BuildGatewayEnv(&models.Instance{
+		ID:                  90,
+		UserID:              45,
+		Type:                "hermes",
+		RuntimeType:         RuntimeBackendGateway,
+		InstanceMode:        InstanceModeLite,
+		AccessToken:         &accessToken,
+		AgentBootstrapToken: &agentToken,
+		WorkspacePath:       &workspacePath,
+		DiskGB:              20,
+	})
+	if err != nil {
+		t.Fatalf("BuildGatewayEnv returned error: %v", err)
+	}
+
+	wantPersistentDir := path.Join(workspacePath, "home", ".hermes")
+	if env["CLAWMANAGER_AGENT_PERSISTENT_DIR"] != wantPersistentDir {
+		t.Fatalf("persistent dir = %q, want %q", env["CLAWMANAGER_AGENT_PERSISTENT_DIR"], wantPersistentDir)
+	}
+}
 func TestInstanceServiceCreateLiteSkipsPerInstanceResourceQuota(t *testing.T) {
 	workspaceRoot := strings.ReplaceAll(t.TempDir(), "\\", "/")
 	instanceRepo := newV2LifecycleInstanceRepo()

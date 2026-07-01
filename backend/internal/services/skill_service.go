@@ -616,7 +616,7 @@ func liteSkillInstallRoot(instance *models.Instance) string {
 	}
 	workspacePath := filepath.Clean(strings.TrimSpace(*instance.WorkspacePath))
 	if strings.EqualFold(strings.TrimSpace(instance.Type), RuntimeTypeHermes) {
-		return filepath.Join(workspacePath, ".hermes", "skills")
+		return filepath.Join(workspacePath, "home", ".hermes", "skills")
 	}
 	return filepath.Join(workspacePath, "home", ".openclaw", "workspace", "skills")
 }
@@ -627,7 +627,7 @@ func liteRuntimePersistentRoot(instance *models.Instance) string {
 	}
 	workspacePath := filepath.Clean(strings.TrimSpace(*instance.WorkspacePath))
 	if strings.EqualFold(strings.TrimSpace(instance.Type), RuntimeTypeHermes) {
-		return filepath.Join(workspacePath, ".hermes")
+		return filepath.Join(workspacePath, "home", ".hermes")
 	}
 	return filepath.Join(workspacePath, "home", ".openclaw")
 }
@@ -709,8 +709,12 @@ func writeSkillDirectoryAtomically(targetRoot, targetName string, files map[stri
 	if err := os.MkdirAll(targetRoot, 0750); err != nil {
 		return fmt.Errorf("failed to prepare lite skill root: %w", err)
 	}
+	tmpRoot := filepath.Join(targetRoot, ".tmp")
+	if err := os.MkdirAll(tmpRoot, 0750); err != nil {
+		return fmt.Errorf("failed to prepare lite skill temp root: %w", err)
+	}
 
-	tmpDir, err := os.MkdirTemp(targetRoot, ".tmp-skill-"+targetName+"-")
+	tmpDir, err := os.MkdirTemp(tmpRoot, ".tmp-skill-"+targetName+"-")
 	if err != nil {
 		return fmt.Errorf("failed to create lite skill temp dir: %w", err)
 	}
