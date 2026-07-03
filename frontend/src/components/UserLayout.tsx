@@ -16,6 +16,7 @@ import LanguageSwitcher from './LanguageSwitcher';
 interface UserLayoutProps {
   children: React.ReactNode;
   title?: string;
+  titleAccessory?: React.ReactNode;
 }
 
 interface UserNavItem {
@@ -28,7 +29,7 @@ interface UserNavItem {
 const shellContainerClass = 'w-full px-3 sm:px-4 lg:px-5 2xl:px-6';
 const appLogoSrc = '/lobster_logo.png';
 
-const UserLayout: React.FC<UserLayoutProps> = ({ children, title }) => {
+const UserLayout: React.FC<UserLayoutProps> = ({ children, title, titleAccessory }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
@@ -105,8 +106,9 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, title }) => {
 
         {title && (
           <div className="app-subheader">
-            <div className={`${shellContainerClass} py-4`}>
+            <div className={`${shellContainerClass} flex flex-col gap-3 py-4`}>
               <h1 className="text-xl font-semibold text-slate-950">{title}</h1>
+              {titleAccessory}
             </div>
           </div>
         )}
@@ -176,8 +178,18 @@ const UserLayout: React.FC<UserLayoutProps> = ({ children, title }) => {
         <div className="flex min-w-0 flex-1 flex-col">
           {title && (
             <div className="app-subheader">
-              <div className={`${shellContainerClass} flex h-20 items-center`}>
-                <h1 className="text-2xl font-semibold text-slate-950">{title}</h1>
+              <div className={`${shellContainerClass} flex min-h-20 items-center justify-between gap-6 py-4`}>
+                <div className="min-w-0">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[#b46c50]">
+                    Workspace
+                  </div>
+                  <h1 className="mt-1 truncate text-2xl font-semibold text-slate-950">{title}</h1>
+                </div>
+                {titleAccessory && (
+                  <div className="flex shrink-0 justify-end">
+                    {titleAccessory}
+                  </div>
+                )}
               </div>
             </div>
           )}

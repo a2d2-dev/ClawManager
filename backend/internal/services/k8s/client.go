@@ -272,6 +272,16 @@ func (c *Client) GetTeamSharedPVCName(teamID int) string {
 	return sanitizeK8sName(fmt.Sprintf("clawreef-team-%d-shared", teamID))
 }
 
+// GetInstancePVName returns the cluster-scoped PV name for an instance.
+func (c *Client) GetInstancePVName(userID, instanceID int) string {
+	return sanitizeK8sName(fmt.Sprintf("clawreef-pv-%s-instance-%d", c.GetNamespace(userID), instanceID))
+}
+
+// GetTeamSharedPVName returns the cluster-scoped PV name for a Team shared workspace.
+func (c *Client) GetTeamSharedPVName(userID, teamID int) string {
+	return sanitizeK8sName(fmt.Sprintf("clawreef-pv-%s-team-%d-shared", c.GetNamespace(userID), teamID))
+}
+
 // GetTeamSecretName returns the Secret name used for Team Redis URL and token env.
 func (c *Client) GetTeamSecretName(teamID int) string {
 	return sanitizeK8sName(fmt.Sprintf("clawreef-team-%d-bus", teamID))

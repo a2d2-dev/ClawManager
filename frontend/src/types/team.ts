@@ -1,12 +1,17 @@
 import type { OpenClawConfigPlan } from "./openclawConfig";
 
+export type TeamCommunicationMode =
+  | "leader_mediated"
+  | "peer_assisted"
+  | "full_mesh";
+
 export interface Team {
   id: number;
   user_id: number;
   name: string;
   description?: string;
   status: "creating" | "running" | "failed" | "deleting" | "deleted";
-  communication_mode: string;
+  communication_mode: TeamCommunicationMode | string;
   redis_events_last_id: string;
   shared_pvc_name?: string;
   shared_pvc_namespace?: string;
@@ -79,10 +84,30 @@ export interface TeamEvent {
   task_id?: number;
   message_id?: string;
   event_type: string;
+  event_id?: string;
+  completion_id?: string;
+  sequence_no: number;
   redis_stream_id?: string;
   occurred_at?: string;
   created_at: string;
   payload?: Record<string, unknown>;
+}
+
+export interface TeamWorkItem {
+  id: number;
+  team_id: number;
+  root_task_id: number;
+  work_id: string;
+  owner_member_id?: number;
+  title: string;
+  status: "pending" | "dispatched" | "running" | "succeeded" | "failed" | "stale";
+  depends_on?: string[];
+  result?: Record<string, unknown>;
+  artifact_refs?: string[];
+  created_at: string;
+  started_at?: string;
+  finished_at?: string;
+  updated_at: string;
 }
 
 export interface CreateTeamMemberRequest {
@@ -108,7 +133,7 @@ export interface CreateTeamMemberRequest {
 export interface CreateTeamRequest {
   name: string;
   description?: string;
-  communication_mode?: string;
+  communication_mode?: TeamCommunicationMode;
   shared_storage_gb?: number;
   storage_class?: string;
   members: CreateTeamMemberRequest[];
@@ -121,6 +146,7 @@ export interface TeamDetails {
   members: TeamMember[];
   tasks?: TeamTask[];
   events?: TeamEvent[];
+  work_items?: TeamWorkItem[];
 }
 
 export interface TeamTasksHistoryResponse {
@@ -140,6 +166,27 @@ export interface TeamListResponse {
   total: number;
   page: number;
   limit: number;
+}
+
+export interface TeamWorkspaceFileEntry {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  size: number;
+  modified_at?: string;
+  previewable: boolean;
+}
+
+export interface TeamWorkspaceListResponse {
+  path: string;
+  root: string;
+  entries: TeamWorkspaceFileEntry[];
+}
+
+export interface TeamWorkspacePreviewResponse {
+  path: string;
+  name: string;
+  content: string;
 }
 
 export interface DispatchTeamTaskRequest {

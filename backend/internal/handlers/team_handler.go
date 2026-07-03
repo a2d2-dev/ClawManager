@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"clawreef/internal/services"
 	"clawreef/internal/utils"
@@ -107,6 +108,118 @@ func (h *TeamHandler) ListEvents(c *gin.Context) {
 		return
 	}
 	utils.Success(c, http.StatusOK, "Team events retrieved successfully", events)
+}
+
+func (h *TeamHandler) ListWorkspaceFiles(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	payload, err := h.teamService.ListWorkspaceFiles(c.Request.Context(), userID.(int), teamID, c.Query("path"))
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusOK, "Team workspace files retrieved successfully", payload)
+}
+
+func (h *TeamHandler) PreviewWorkspaceFile(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	payload, err := h.teamService.PreviewWorkspaceFile(c.Request.Context(), userID.(int), teamID, c.Query("path"))
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusOK, "Team workspace file preview retrieved successfully", payload)
+}
+
+func (h *TeamHandler) DownloadWorkspaceFile(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	payload, err := h.teamService.DownloadWorkspaceFile(c.Request.Context(), userID.(int), teamID, c.Query("path"))
+	if err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="`+strings.ReplaceAll(payload.Name, `"`, "")+`"`)
+	c.Data(http.StatusOK, payload.ContentType, payload.Data)
+}
+
+func (h *TeamHandler) CreateWorkspaceFolder(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	var req services.TeamWorkspaceFolderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationError(c, err)
+		return
+	}
+	if err := h.teamService.CreateWorkspaceFolder(c.Request.Context(), userID.(int), teamID, req); err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusCreated, "Team workspace folder created successfully", nil)
+}
+
+func (h *TeamHandler) RenameWorkspaceEntry(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	var req services.TeamWorkspaceRenameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ValidationError(c, err)
+		return
+	}
+	if err := h.teamService.RenameWorkspaceEntry(c.Request.Context(), userID.(int), teamID, req); err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusOK, "Team workspace entry renamed successfully", nil)
+}
+
+func (h *TeamHandler) DeleteWorkspaceEntry(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	if err := h.teamService.DeleteWorkspaceEntry(c.Request.Context(), userID.(int), teamID, c.Query("path")); err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusOK, "Team workspace entry deleted successfully", nil)
+}
+
+func (h *TeamHandler) UploadWorkspaceFiles(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	teamID, ok := parseTeamID(c)
+	if !ok {
+		return
+	}
+	form, err := c.MultipartForm()
+	if err != nil {
+		utils.ValidationError(c, err)
+		return
+	}
+	files := form.File["files"]
+	relativePaths := form.Value["relative_paths"]
+	if err := h.teamService.UploadWorkspaceFiles(c.Request.Context(), userID.(int), teamID, c.PostForm("path"), files, relativePaths); err != nil {
+		utils.HandleError(c, err)
+		return
+	}
+	utils.Success(c, http.StatusCreated, "Team workspace files uploaded successfully", nil)
 }
 
 func (h *TeamHandler) DispatchTask(c *gin.Context) {

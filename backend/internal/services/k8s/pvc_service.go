@@ -150,12 +150,10 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 
 	pvcName := s.client.GetTeamSharedPVCName(teamID)
 	namespace := s.client.GetNamespace(userID)
-	if storageClass == "" {
-		storageClass = firstNonEmpty(s.client.WorkspaceStorageClass, s.client.StorageClass)
-	}
 	storageSize := resource.MustParse(fmt.Sprintf("%dGi", storageSizeGB))
-	workspaceAccessMode := workspacePVCAccessMode(s.client.WorkspaceAccessMode)
 	useWorkspaceNFS := strings.TrimSpace(s.client.WorkspaceNFSServer) != ""
+	storageClass = s.teamSharedPVCStorageClass(storageClass, useWorkspaceNFS)
+	workspaceAccessMode := workspacePVCAccessMode(s.client.WorkspaceAccessMode)
 	if useWorkspaceNFS {
 		if err := s.ensureTeamSharedWorkspaceDirectory(userID, teamID); err != nil {
 			return nil, err
@@ -191,11 +189,10 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 			existingPVC, getErr := s.client.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
 			if getErr == nil && existingPVC != nil && existingPVC.Labels["team-id"] == fmt.Sprintf("%d", teamID) {
 				if useWorkspaceNFS {
-					if err := s.ensureWorkspaceNFSPVForTeamSharedPVC(ctx, namespace, pvcName, existingPVC, userID, teamID, storageSizeGB, storageClass, fmt.Sprintf("clawreef-pv-user-%d-team-%d-shared", userID, teamID)); err != nil {
+					if err := s.ensureWorkspaceNFSPVForTeamSharedPVC(ctx, namespace, pvcName, existingPVC, userID, teamID, storageSizeGB, storageClass, s.client.GetTeamSharedPVName(userID, teamID)); err != nil {
 						return nil, err
 					}
-				}
-				if existingPVC.Status.Phase != corev1.ClaimBound && s.shouldUseManualHostPathFallback(storageClass) {
+				} else if existingPVC.Status.Phase != corev1.ClaimBound && s.shouldUseManualHostPathFallback(storageClass) {
 					go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, s.pvcBindTimeout())
 				}
 				return existingPVC, nil
@@ -205,11 +202,10 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 	}
 
 	if useWorkspaceNFS {
-		if err := s.ensureWorkspaceNFSPVForTeamSharedPVC(ctx, namespace, pvcName, createdPVC, userID, teamID, storageSizeGB, storageClass, fmt.Sprintf("clawreef-pv-user-%d-team-%d-shared", userID, teamID)); err != nil {
+		if err := s.ensureWorkspaceNFSPVForTeamSharedPVC(ctx, namespace, pvcName, createdPVC, userID, teamID, storageSizeGB, storageClass, s.client.GetTeamSharedPVName(userID, teamID)); err != nil {
 			return nil, err
 		}
-	}
-	if s.shouldUseManualHostPathFallback(storageClass) {
+	} else if s.shouldUseManualHostPathFallback(storageClass) {
 		go s.monitorTeamSharedPVCBinding(context.Background(), namespace, pvcName, userID, teamID, storageSizeGB, storageClass, s.pvcBindTimeout())
 	}
 	return createdPVC, nil
@@ -217,6 +213,22 @@ func (s *PVCService) CreateTeamSharedPVC(ctx context.Context, userID, teamID, st
 
 func usesManualHostPathFallback(storageClass string) bool {
 	return strings.EqualFold(strings.TrimSpace(storageClass), "manual")
+}
+
+func (s *PVCService) teamSharedPVCStorageClass(requested string, useWorkspaceNFS bool) string {
+	requested = strings.TrimSpace(requested)
+	if !useWorkspaceNFS {
+		return firstNonEmpty(requested, s.client.WorkspaceStorageClass, s.client.StorageClass)
+	}
+	workspaceClass := strings.TrimSpace(s.client.WorkspaceStorageClass)
+	globalClass := strings.TrimSpace(s.client.StorageClass)
+	instanceClass := strings.TrimSpace(s.client.InstanceStorageClass)
+	if requested == "" ||
+		strings.EqualFold(requested, globalClass) ||
+		strings.EqualFold(requested, instanceClass) {
+		return firstNonEmpty(workspaceClass, "manual")
+	}
+	return requested
 }
 
 func (s *PVCService) shouldUseManualHostPathFallback(storageClass string) bool {
@@ -269,7 +281,7 @@ func (s *PVCService) waitForTeamSharedPVCBinding(ctx context.Context, namespace,
 }
 
 func (s *PVCService) createPVForTeamSharedPVC(ctx context.Context, namespace, pvcName string, userID, teamID, storageSizeGB int, storageClass string) (*corev1.PersistentVolumeClaim, error) {
-	pvName := fmt.Sprintf("clawreef-pv-user-%d-team-%d-shared", userID, teamID)
+	pvName := s.client.GetTeamSharedPVName(userID, teamID)
 
 	existingPV, err := s.client.Clientset.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
 	if err == nil && existingPV != nil {
@@ -281,6 +293,18 @@ func (s *PVCService) createPVForTeamSharedPVC(ctx context.Context, namespace, pv
 		} else if existingPV.Spec.ClaimRef != nil &&
 			existingPV.Spec.ClaimRef.Namespace == namespace &&
 			existingPV.Spec.ClaimRef.Name == pvcName {
+			if strings.TrimSpace(s.client.WorkspaceNFSServer) != "" {
+				nfsPath := teamSharedWorkspaceNFSPath(s.client.WorkspaceNFSPath, userID, teamID)
+				nfsServer, nfsErr := s.workspaceNFSServerForPV(ctx)
+				if nfsErr != nil {
+					return nil, nfsErr
+				}
+				if existingPV.Spec.NFS == nil ||
+					strings.TrimSpace(existingPV.Spec.NFS.Server) != nfsServer ||
+					strings.TrimSpace(existingPV.Spec.NFS.Path) != nfsPath {
+					return nil, fmt.Errorf("Team shared PV %s already exists for %s/%s but is not workspace NFS-backed", pvName, namespace, pvcName)
+				}
+			}
 			time.Sleep(2 * time.Second)
 			return s.client.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
 		} else if existingPV.Spec.ClaimRef != nil {
@@ -684,7 +708,7 @@ func (s *PVCService) waitForPVCBinding(ctx context.Context, namespace, pvcName s
 
 // createPVForPVC creates a PV manually to bind to the PVC
 func (s *PVCService) createPVForPVC(ctx context.Context, namespace, pvcName string, userID, instanceID, storageSizeGB int, storageClass string) (*corev1.PersistentVolumeClaim, error) {
-	pvName := fmt.Sprintf("clawreef-pv-user-%d-instance-%d", userID, instanceID)
+	pvName := s.client.GetInstancePVName(userID, instanceID)
 	// Use configurable host path prefix for persistent storage
 	hostPathPrefix := "/data/clawreef"
 	if s.client != nil && s.client.HostPathPrefix != "" {
@@ -983,7 +1007,7 @@ func (s *PVCService) DeletePVC(ctx context.Context, userID, instanceID int) erro
 
 	pvcName := s.client.GetPVCName(instanceID)
 	namespace := s.client.GetNamespace(userID)
-	pvName := fmt.Sprintf("clawreef-pv-user-%d-instance-%d", userID, instanceID)
+	pvName := s.client.GetInstancePVName(userID, instanceID)
 
 	// Get PVC first to find the associated PV
 	pvc, err := s.client.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
@@ -1052,9 +1076,43 @@ func (s *PVCService) deleteManagedHostPathPV(ctx context.Context, pvName string)
 	fmt.Printf("PV %s deleted successfully\n", pvName)
 }
 
-// DeleteTeamSharedPVC deletes a Team shared PVC and the predictable hostPath PV
-// used by the single-node manual storage fallback. It does not delete an
-// arbitrary bound PV because that may belong to a real RWX provisioner.
+func (s *PVCService) deleteManagedTeamSharedPV(ctx context.Context, pvName string, userID, teamID int) {
+	pvName = strings.TrimSpace(pvName)
+	if pvName == "" || s == nil || s.client == nil || s.client.Clientset == nil {
+		return
+	}
+	pv, err := s.client.Clientset.CoreV1().PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			fmt.Printf("Team shared PV %s not found or already deleted\n", pvName)
+		} else {
+			fmt.Printf("Warning: failed to get Team shared PV %s before delete: %v\n", pvName, err)
+		}
+		return
+	}
+	if pv.Labels["managed-by"] != "clawreef" ||
+		pv.Labels["user-id"] != fmt.Sprintf("%d", userID) ||
+		pv.Labels["team-id"] != fmt.Sprintf("%d", teamID) {
+		fmt.Printf("Skipping Team shared PV %s delete because it is not owned by user %d team %d\n", pvName, userID, teamID)
+		return
+	}
+	if pv.Spec.HostPath == nil && pv.Spec.NFS == nil {
+		fmt.Printf("Skipping Team shared PV %s delete because it is not a ClawManager hostPath/NFS PV\n", pvName)
+		return
+	}
+	if err := s.client.Clientset.CoreV1().PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{}); err != nil {
+		if !errors.IsNotFound(err) {
+			fmt.Printf("Warning: failed to delete Team shared PV %s: %v\n", pvName, err)
+		}
+		return
+	}
+	fmt.Printf("Team shared PV %s deleted successfully\n", pvName)
+}
+
+// DeleteTeamSharedPVC deletes a Team shared PVC and the predictable Team PV
+// managed by ClawManager. It only deletes a bound PV when that PV is explicitly
+// labeled as belonging to this Team, avoiding accidental deletion of external
+// provisioner volumes.
 func (s *PVCService) DeleteTeamSharedPVC(ctx context.Context, userID, teamID int) error {
 	if s.client == nil {
 		return fmt.Errorf("k8s client not initialized")
@@ -1062,14 +1120,24 @@ func (s *PVCService) DeleteTeamSharedPVC(ctx context.Context, userID, teamID int
 
 	pvcName := s.client.GetTeamSharedPVCName(teamID)
 	namespace := s.client.GetNamespace(userID)
-	pvName := fmt.Sprintf("clawreef-pv-user-%d-team-%d-shared", userID, teamID)
+	pvName := s.client.GetTeamSharedPVName(userID, teamID)
+	boundPVName := ""
+
+	if pvc, err := s.client.Clientset.CoreV1().PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{}); err == nil && pvc != nil {
+		boundPVName = pvc.Spec.VolumeName
+	} else if err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to get Team shared PVC %s/%s before delete: %w", namespace, pvcName, err)
+	}
 
 	if err := s.client.Clientset.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, pvcName, metav1.DeleteOptions{}); err != nil {
 		if !errors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete Team shared PVC %s/%s: %w", namespace, pvcName, err)
 		}
 	}
-	s.deleteManagedHostPathPV(ctx, pvName)
+	s.deleteManagedTeamSharedPV(ctx, pvName, userID, teamID)
+	if boundPVName != "" && boundPVName != pvName {
+		s.deleteManagedTeamSharedPV(ctx, boundPVName, userID, teamID)
+	}
 	return nil
 }
 

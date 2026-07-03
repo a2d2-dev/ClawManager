@@ -416,6 +416,13 @@ func main() {
 			teams.GET("/:id/tasks", teamHandler.ListTasks)
 			teams.POST("/:id/tasks", teamHandler.DispatchTask)
 			teams.GET("/:id/events", teamHandler.ListEvents)
+			teams.GET("/:id/workspace/files", teamHandler.ListWorkspaceFiles)
+			teams.GET("/:id/workspace/preview", teamHandler.PreviewWorkspaceFile)
+			teams.GET("/:id/workspace/download", teamHandler.DownloadWorkspaceFile)
+			teams.POST("/:id/workspace/folders", teamHandler.CreateWorkspaceFolder)
+			teams.POST("/:id/workspace/rename", teamHandler.RenameWorkspaceEntry)
+			teams.POST("/:id/workspace/upload", teamHandler.UploadWorkspaceFiles)
+			teams.DELETE("/:id/workspace/files", teamHandler.DeleteWorkspaceEntry)
 			teams.DELETE("/:id/members/:memberID", teamHandler.DeleteMember)
 		}
 

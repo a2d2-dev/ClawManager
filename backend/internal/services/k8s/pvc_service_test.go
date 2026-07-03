@@ -130,6 +130,7 @@ func TestCreatePVForTeamSharedPVCUsesWorkspaceNFSWhenConfigured(t *testing.T) {
 	service := &PVCService{
 		client: &Client{
 			Clientset:          clientset,
+			Namespace:          "clawmanager",
 			WorkspaceRoot:      workspaceRoot,
 			WorkspaceNFSServer: "workspace-store.clawmanager-system.svc.cluster.local",
 			WorkspaceNFSPath:   "/",
@@ -140,7 +141,7 @@ func TestCreatePVForTeamSharedPVCUsesWorkspaceNFSWhenConfigured(t *testing.T) {
 		t.Fatalf("createPVForTeamSharedPVC returned error: %v", err)
 	}
 
-	pv, err := clientset.CoreV1().PersistentVolumes().Get(ctx, "clawreef-pv-user-1-team-28-shared", metav1.GetOptions{})
+	pv, err := clientset.CoreV1().PersistentVolumes().Get(ctx, "clawreef-pv-clawmanager-user-1-team-28-shared", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected Team shared PV: %v", err)
 	}
@@ -185,6 +186,7 @@ func TestCreatePVForTeamSharedPVCResolvesWorkspaceServiceDNS(t *testing.T) {
 	pvcService := &PVCService{
 		client: &Client{
 			Clientset:          clientset,
+			Namespace:          "clawmanager",
 			WorkspaceRoot:      t.TempDir(),
 			WorkspaceNFSServer: "workspace-store.clawmanager-system.svc.cluster.local",
 			WorkspaceNFSPath:   "/",
@@ -195,7 +197,7 @@ func TestCreatePVForTeamSharedPVCResolvesWorkspaceServiceDNS(t *testing.T) {
 		t.Fatalf("createPVForTeamSharedPVC returned error: %v", err)
 	}
 
-	pv, err := clientset.CoreV1().PersistentVolumes().Get(ctx, "clawreef-pv-user-1-team-28-shared", metav1.GetOptions{})
+	pv, err := clientset.CoreV1().PersistentVolumes().Get(ctx, "clawreef-pv-clawmanager-user-1-team-28-shared", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected Team shared PV: %v", err)
 	}
@@ -280,12 +282,44 @@ func TestCreateTeamSharedPVCCreatesWorkspaceNFSPVBeforeReturning(t *testing.T) {
 		t.Fatalf("CreateTeamSharedPVC returned error: %v", err)
 	}
 
-	pv, err := client.Clientset.CoreV1().PersistentVolumes().Get(ctx, "clawreef-pv-user-1-team-28-shared", metav1.GetOptions{})
+	pv, err := client.Clientset.CoreV1().PersistentVolumes().Get(ctx, "clawreef-pv-clawmanager-user-1-team-28-shared", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("expected Team shared NFS PV before Lite gateways start: %v", err)
 	}
 	if pv.Spec.NFS == nil || pv.Spec.NFS.Path != "/teams/user-1/team-28-shared" {
 		t.Fatalf("unexpected Team shared PV source: %#v", pv.Spec.PersistentVolumeSource)
+	}
+}
+
+func TestCreateTeamSharedPVCUsesWorkspaceNFSInsteadOfInstanceStorageClass(t *testing.T) {
+	ctx := context.Background()
+	client := &Client{
+		Clientset:            fake.NewSimpleClientset(),
+		Namespace:            "clawmanager",
+		StorageClass:         "longhorn",
+		InstanceStorageClass: "longhorn",
+		WorkspaceRoot:        t.TempDir(),
+		WorkspaceNFSServer:   "workspace-store.clawmanager-system.svc.cluster.local",
+		WorkspaceNFSPath:     "/",
+	}
+	service := &PVCService{
+		client:           client,
+		namespaceService: &NamespaceService{client: client},
+	}
+
+	pvc, err := service.CreateTeamSharedPVC(ctx, 1, 28, 10, "")
+	if err != nil {
+		t.Fatalf("CreateTeamSharedPVC returned error: %v", err)
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "manual" {
+		t.Fatalf("Team shared PVC storage class = %#v, want manual static NFS binding", pvc.Spec.StorageClassName)
+	}
+	pv, err := client.Clientset.CoreV1().PersistentVolumes().Get(ctx, "clawreef-pv-clawmanager-user-1-team-28-shared", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("expected Team shared NFS PV: %v", err)
+	}
+	if pv.Spec.NFS == nil {
+		t.Fatalf("Team shared PV should use workspace NFS, got %#v", pv.Spec.PersistentVolumeSource)
 	}
 }
 
@@ -301,7 +335,7 @@ func TestCreateTeamSharedPVCRejectsExistingNonWorkspaceNFSPV(t *testing.T) {
 		},
 	}
 	pv := &corev1.PersistentVolume{
-		ObjectMeta: metav1.ObjectMeta{Name: "clawreef-pv-user-1-team-28-shared"},
+		ObjectMeta: metav1.ObjectMeta{Name: "clawreef-pv-clawmanager-user-1-team-28-shared"},
 		Spec: corev1.PersistentVolumeSpec{
 			ClaimRef: &corev1.ObjectReference{Namespace: namespace, Name: pvcName},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{

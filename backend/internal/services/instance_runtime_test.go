@@ -31,6 +31,9 @@ func TestBuildRuntimeConfig_HermesUsesWebtopDefaults(t *testing.T) {
 	if config.MountPath != "/config" {
 		t.Fatalf("expected Hermes mount path /config, got %q", config.MountPath)
 	}
+	if config.Env["HERMES_HOME"] != "/config/.hermes" {
+		t.Fatalf("expected Hermes HERMES_HOME /config/.hermes, got %q", config.Env["HERMES_HOME"])
+	}
 	if config.Env["SUBFOLDER"] != "/" {
 		t.Fatalf("expected Hermes default SUBFOLDER /, got %q", config.Env["SUBFOLDER"])
 	}

@@ -9,7 +9,20 @@ import {
   type SystemImageSetting,
 } from "../../services/systemSettingsService";
 import { teamService } from "../../services/teamService";
-import type { CreateTeamRequest } from "../../types/team";
+import {
+  AGENCY_AGENT_PROFILES,
+  buildAgencyAgentEnvironment,
+  getAgencyAgentProfile,
+  type AgencyAgentProfileKey,
+} from "../../lib/agencyAgentProfiles";
+import {
+  BUILTIN_MEMBER_TEMPLATES,
+  type ResourcePresetKey,
+  type RuntimeType,
+  type TeamMemberTemplate,
+  type TeamMemberTemplateMember,
+} from "../../lib/teamTemplates";
+import type { CreateTeamRequest, TeamCommunicationMode } from "../../types/team";
 import type { InstanceMode } from "../../types/instance";
 import type {
   OpenClawConfigCompilePreview,
@@ -22,36 +35,9 @@ type EnvironmentRow = {
   value: string;
 };
 
-type TeamMemberDraft = {
+type TeamMemberDraft = TeamMemberTemplateMember & {
   id: string;
-  memberId: string;
-  name: string;
-  role: string;
-  runtimeType: RuntimeType;
   instanceMode: InstanceMode;
-  description: string;
-  resourcePreset: ResourcePresetKey;
-  isLeader: boolean;
-  cpuCores: number;
-  memoryGb: number;
-  diskGb: number;
-  gpuEnabled: boolean;
-  gpuCount: number;
-  image: string;
-};
-
-type RuntimeType = "openclaw" | "hermes";
-type ResourcePresetKey = "small" | "medium" | "large" | "custom";
-type TeamMemberTemplateMember = Omit<TeamMemberDraft, "id" | "instanceMode"> & {
-  instanceMode?: InstanceMode;
-};
-type TeamMemberTemplate = {
-  id: string;
-  name: string;
-  teamName?: string;
-  description?: string;
-  source: "builtin" | "custom";
-  members: TeamMemberTemplateMember[];
 };
 
 const RUNTIME_OPTIONS: Array<{ value: RuntimeType; label: string }> = [
@@ -62,6 +48,18 @@ const RUNTIME_OPTIONS: Array<{ value: RuntimeType; label: string }> = [
 const INSTANCE_MODE_OPTIONS: Array<{ value: InstanceMode; label: string }> = [
   { value: "lite", label: "Lite" },
   { value: "pro", label: "Pro" },
+];
+
+const TEAM_COMMUNICATION_MODE_OPTIONS: Array<{
+  value: TeamCommunicationMode;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "leader_mediated",
+    label: "Leader 中介协作",
+    description: "任务统一进入 Leader，由 Leader 拆解、派发、回收并汇总结果。",
+  },
 ];
 
 const RESOURCE_PRESETS: Record<
@@ -75,240 +73,7 @@ const RESOURCE_PRESETS: Record<
 
 const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const CUSTOM_MEMBER_TEMPLATES_STORAGE_KEY = "clawmanager.team.memberTemplates.v1";
-
-const BUILTIN_MEMBER_TEMPLATES: TeamMemberTemplate[] = [
-  {
-    id: "builtin-leader-worker",
-    name: "标准双成员",
-    teamName: "research-team",
-    description: "标准 Leader-mediated Team：Leader 负责目标拆解、成员协调和结果汇总，Worker 负责执行实现任务并同步进展。",
-    source: "builtin",
-    members: [
-      {
-        memberId: "leader",
-        name: "team-leader",
-        role: "leader",
-        runtimeType: "openclaw",
-        description: "负责拆解目标、协调成员、汇总结果和对外回报。",
-        resourcePreset: "small",
-        isLeader: true,
-        cpuCores: 2,
-        memoryGb: 4,
-        diskGb: 20,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "worker-1",
-        name: "team-worker",
-        role: "developer",
-        runtimeType: "openclaw",
-        description: "负责执行实现任务、提交进展并同步阻塞项。",
-        resourcePreset: "small",
-        isLeader: false,
-        cpuCores: 2,
-        memoryGb: 4,
-        diskGb: 20,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-    ],
-  },
-  {
-    id: "builtin-dev-qa-docs",
-    name: "研发验收三成员",
-    teamName: "delivery-team",
-    description: "研发交付 Team：Leader 负责拆解和协调，Developer 负责实现联调，Reviewer 负责测试验证、回归检查和交付复核。",
-    source: "builtin",
-    members: [
-      {
-        memberId: "leader",
-        name: "delivery-lead",
-        role: "leader",
-        runtimeType: "openclaw",
-        description: "负责需求拆解、优先级判断、任务派发和结果汇总。",
-        resourcePreset: "medium",
-        isLeader: true,
-        cpuCores: 4,
-        memoryGb: 8,
-        diskGb: 50,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "developer",
-        name: "developer",
-        role: "developer",
-        runtimeType: "openclaw",
-        description: "负责代码实现、接口联调、必要的单元测试补充。",
-        resourcePreset: "medium",
-        isLeader: false,
-        cpuCores: 4,
-        memoryGb: 8,
-        diskGb: 50,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "reviewer",
-        name: "reviewer",
-        role: "reviewer",
-        runtimeType: "openclaw",
-        description: "负责测试验证、回归检查、文档和交付清单复核。",
-        resourcePreset: "small",
-        isLeader: false,
-        cpuCores: 2,
-        memoryGb: 4,
-        diskGb: 20,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-    ],
-  },
-  {
-    id: "builtin-software-engineering-team",
-    name: "Software-Engineering-Team",
-    teamName: "software-engineering-team",
-    description:
-      "软件工程 Team：Leader 负责目标、任务拆分、协调、风险控制和最终收口；PM 定义产品方向和优先级；UI/UX 负责体验与设计规范；Frontend、Backend、Architect、QA 和 Code Reviewer 分别负责界面、服务、架构、质量验证和代码审查。",
-    source: "builtin",
-    members: [
-      {
-        memberId: "leader",
-        name: "engineering-lead",
-        role: "leader",
-        runtimeType: "openclaw",
-        description:
-          "负责目标管理、DoD 定义、任务拆分、依赖协调、风险治理、验收和最终决策。",
-        resourcePreset: "medium",
-        isLeader: true,
-        cpuCores: 4,
-        memoryGb: 8,
-        diskGb: 50,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "pm",
-        name: "product-manager",
-        role: "product-manager",
-        runtimeType: "openclaw",
-        description:
-          "负责需求收集、产品方向、PRD、Roadmap、用户流程、功能边界、优先级和验收标准。",
-        resourcePreset: "small",
-        isLeader: false,
-        cpuCores: 2,
-        memoryGb: 4,
-        diskGb: 20,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "ui-ux",
-        name: "ui-ux-designer",
-        role: "ui-ux-designer",
-        runtimeType: "openclaw",
-        description:
-          "负责页面视觉、用户体验、交互流程、Figma 设计稿、组件规范和 Design System。",
-        resourcePreset: "small",
-        isLeader: false,
-        cpuCores: 2,
-        memoryGb: 4,
-        diskGb: 20,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "frontend",
-        name: "frontend-engineer",
-        role: "frontend-engineer",
-        runtimeType: "openclaw",
-        description:
-          "负责 React/Vue 等前端页面开发、接口对接、状态管理、用户交互和性能优化。",
-        resourcePreset: "medium",
-        isLeader: false,
-        cpuCores: 4,
-        memoryGb: 8,
-        diskGb: 50,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "backend",
-        name: "backend-engineer",
-        role: "backend-engineer",
-        runtimeType: "openclaw",
-        description:
-          "负责 API、数据库、权限、消息队列、微服务、业务逻辑和系统能力实现。",
-        resourcePreset: "medium",
-        isLeader: false,
-        cpuCores: 4,
-        memoryGb: 8,
-        diskGb: 50,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "architect",
-        name: "architect",
-        role: "architect",
-        runtimeType: "openclaw",
-        description:
-          "负责技术选型、系统拆分、高可用、扩展性、技术规范和长期演进方案。",
-        resourcePreset: "medium",
-        isLeader: false,
-        cpuCores: 4,
-        memoryGb: 8,
-        diskGb: 50,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "qa",
-        name: "qa-engineer",
-        role: "qa-engineer",
-        runtimeType: "openclaw",
-        description:
-          "负责功能测试、自动化测试、回归测试、压测、Bug 管理和稳定性验证。",
-        resourcePreset: "small",
-        isLeader: false,
-        cpuCores: 2,
-        memoryGb: 4,
-        diskGb: 20,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-      {
-        memberId: "code-reviewer",
-        name: "code-reviewer",
-        role: "code-reviewer",
-        runtimeType: "openclaw",
-        description:
-          "负责代码审查、架构一致性、可维护性、测试覆盖、风险点、回归影响和合并前质量把关。",
-        resourcePreset: "small",
-        isLeader: false,
-        cpuCores: 2,
-        memoryGb: 4,
-        diskGb: 20,
-        gpuEnabled: false,
-        gpuCount: 0,
-        image: "",
-      },
-    ],
-  },
-];
+const AGENCY_AGENT_PROFILE_OPTIONS = Object.values(AGENCY_AGENT_PROFILES);
 
 const newDraftId = () =>
   `member-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -338,6 +103,16 @@ const imageOptionKey = (item: SystemImageSetting) =>
   item.id != null
     ? `image-${item.id}`
     : `${item.instance_type}:${item.image}`;
+
+const imageRuntimeTypeForMode = (
+  mode: InstanceMode,
+): NonNullable<SystemImageSetting["runtime_type"]> =>
+  mode === "lite" ? "gateway" : "desktop";
+
+const normalizedImageRuntimeType = (
+  item: SystemImageSetting,
+): NonNullable<SystemImageSetting["runtime_type"]> =>
+  item.runtime_type === "gateway" ? "gateway" : "desktop";
 
 const normalizeMemberId = (value: string) =>
   value
@@ -408,38 +183,11 @@ const uniqueMemberId = (raw: string, usedIds: Set<string>, fallbackIndex: number
   return candidate;
 };
 
-const nextWorkerMemberId = (members: TeamMemberDraft[]) => {
-  const usedIds = new Set(
-    members
-      .map((member) => normalizeMemberId(member.memberId))
-      .filter(Boolean),
-  );
-  let maxWorkerIndex = 0;
-
-  usedIds.forEach((memberId) => {
-    if (memberId === "worker") {
-      maxWorkerIndex = Math.max(maxWorkerIndex, 1);
-      return;
-    }
-    const match = memberId.match(/^worker-(\d+)$/);
-    if (match) {
-      maxWorkerIndex = Math.max(maxWorkerIndex, Number(match[1]));
-    }
-  });
-
-  let candidateIndex = maxWorkerIndex + 1;
-  let candidate = `worker-${candidateIndex}`;
-  while (usedIds.has(candidate)) {
-    candidateIndex += 1;
-    candidate = `worker-${candidateIndex}`;
-  }
-  return candidate;
-};
-
 const CreateTeamPage: React.FC = () => {
   const navigate = useNavigate();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [communicationMode] = useState<TeamCommunicationMode>("leader_mediated");
   const [sharedStorageGb, setSharedStorageGb] = useState(10);
   const [storageClass, setStorageClass] = useState("");
   const [images, setImages] = useState<SystemImageSetting[]>([]);
@@ -457,10 +205,12 @@ const CreateTeamPage: React.FC = () => {
       memberId: "leader",
       role: "leader",
       isLeader: true,
+      agentProfileKey: "agency.agents-orchestrator",
     }),
     defaultMember({
-      memberId: "worker-1",
+      memberId: "worker",
       role: "developer",
+      agentProfileKey: "agency.senior-developer",
     }),
   ]);
   const [loadingImages, setLoadingImages] = useState(true);
@@ -492,9 +242,6 @@ const CreateTeamPage: React.FC = () => {
       ),
     [images],
   );
-  const selectedImage =
-    openClawImages.find((item) => imageOptionKey(item) === selectedImageKey) ||
-    openClawImages[0];
   const memberTemplates = useMemo(
     () => [...BUILTIN_MEMBER_TEMPLATES, ...customMemberTemplates],
     [customMemberTemplates],
@@ -510,6 +257,23 @@ const CreateTeamPage: React.FC = () => {
       runtimeType === "hermes" ? hermesImages : openClawImages,
     [hermesImages, openClawImages],
   );
+  const imageOptionsForMember = useCallback(
+    (runtimeType: RuntimeType, instanceMode: InstanceMode) =>
+      imageOptionsForRuntime(runtimeType).filter(
+        (item) =>
+          normalizedImageRuntimeType(item) ===
+          imageRuntimeTypeForMode(instanceMode),
+      ),
+    [imageOptionsForRuntime],
+  );
+  const defaultOpenClawMemberImages = useMemo(
+    () => imageOptionsForMember("openclaw", "lite"),
+    [imageOptionsForMember],
+  );
+  const selectedImage =
+    defaultOpenClawMemberImages.find(
+      (item) => imageOptionKey(item) === selectedImageKey,
+    ) || defaultOpenClawMemberImages[0];
 
   useEffect(() => {
     const loadImages = async () => {
@@ -527,16 +291,16 @@ const CreateTeamPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (openClawImages.length === 0) {
+    if (defaultOpenClawMemberImages.length === 0) {
       setSelectedImageKey("");
       return;
     }
     setSelectedImageKey((current) =>
-      openClawImages.some((item) => imageOptionKey(item) === current)
+      defaultOpenClawMemberImages.some((item) => imageOptionKey(item) === current)
         ? current
-        : imageOptionKey(openClawImages[0]),
+        : imageOptionKey(defaultOpenClawMemberImages[0]),
     );
-  }, [openClawImages]);
+  }, [defaultOpenClawMemberImages]);
 
   useEffect(() => {
     saveCustomMemberTemplates(customMemberTemplates);
@@ -554,18 +318,21 @@ const CreateTeamPage: React.FC = () => {
   useEffect(() => {
     setMembers((current) =>
       current.map((member) => {
-        const options = imageOptionsForRuntime(member.runtimeType);
+        const options = imageOptionsForMember(
+          member.runtimeType,
+          member.instanceMode,
+        );
         const fallbackImage = options[0]?.image || "";
-        const imageMatchesRuntime = options.some(
+        const imageMatchesRuntimeAndMode = options.some(
           (item) => item.image === member.image,
         );
-        if ((!member.image || !imageMatchesRuntime) && fallbackImage) {
+        if ((!member.image || !imageMatchesRuntimeAndMode) && fallbackImage) {
           return { ...member, image: fallbackImage };
         }
         return member;
       }),
     );
-  }, [imageOptionsForRuntime]);
+  }, [imageOptionsForMember]);
 
   const updateMember = (
     id: string,
@@ -585,8 +352,19 @@ const CreateTeamPage: React.FC = () => {
   };
 
   const setMemberRuntimeType = (id: string, runtimeType: RuntimeType) => {
-    const fallbackImage = imageOptionsForRuntime(runtimeType)[0]?.image || "";
-    updateMember(id, { runtimeType, image: fallbackImage });
+    updateMember(id, (current) => ({
+      runtimeType,
+      image:
+        imageOptionsForMember(runtimeType, current.instanceMode)[0]?.image || "",
+    }));
+  };
+
+  const setMemberInstanceMode = (id: string, instanceMode: InstanceMode) => {
+    updateMember(id, (current) => ({
+      instanceMode,
+      image:
+        imageOptionsForMember(current.runtimeType, instanceMode)[0]?.image || "",
+    }));
   };
 
   const applyResourcePreset = (id: string, preset: ResourcePresetKey) => {
@@ -614,10 +392,11 @@ const CreateTeamPage: React.FC = () => {
   };
 
   const addMember = () => {
+    const nextIndex = members.length + 1;
     setMembers((current) => [
       ...current,
       defaultMember({
-        memberId: nextWorkerMemberId(current),
+        memberId: `worker-${nextIndex}`,
         image: selectedImage?.image || "",
       }),
     ]);
@@ -645,7 +424,7 @@ const CreateTeamPage: React.FC = () => {
   ): TeamMemberDraft => {
     const runtimeType = templateMember.runtimeType || "openclaw";
     const instanceMode = templateMember.instanceMode || "lite";
-    const runtimeImages = imageOptionsForRuntime(runtimeType);
+    const runtimeImages = imageOptionsForMember(runtimeType, instanceMode);
     const templateImageAvailable = runtimeImages.some(
       (item) => item.image === templateMember.image,
     );
@@ -735,6 +514,7 @@ const CreateTeamPage: React.FC = () => {
       runtimeType: member.runtimeType,
       instanceMode: member.instanceMode,
       description: member.description.trim(),
+      agentProfileKey: member.agentProfileKey,
       resourcePreset: member.resourcePreset,
       isLeader: member.isLeader,
       cpuCores: member.cpuCores,
@@ -752,6 +532,7 @@ const CreateTeamPage: React.FC = () => {
       name: packageName,
       teamName: name.trim() || undefined,
       description: description.trim() || undefined,
+      communicationMode: "leader_mediated",
       source: "custom",
       members: templateMembers,
     };
@@ -883,6 +664,47 @@ const CreateTeamPage: React.FC = () => {
     return undefined;
   };
 
+  const profileForMember = (member: TeamMemberDraft) =>
+    getAgencyAgentProfile(member.agentProfileKey);
+
+  const effectiveMemberRole = (member: TeamMemberDraft) => {
+    if (member.isLeader) {
+      return "leader";
+    }
+    const profile = profileForMember(member);
+    if (profile?.roleHint && profile.roleHint !== "leader") {
+      return profile.roleHint;
+    }
+    return member.role.trim() || "member";
+  };
+
+  const effectiveMemberDescription = (member: TeamMemberDraft) => {
+    const explicit = member.description.trim();
+    if (explicit) {
+      return explicit;
+    }
+    return profileForMember(member)?.summary || "";
+  };
+
+  const buildMemberEnvironmentOverrides = (
+    member: TeamMemberDraft,
+    normalizedMemberId: string,
+  ): Record<string, string> | undefined => {
+    const profile = profileForMember(member);
+    const profileEnv = buildAgencyAgentEnvironment(profile, {
+      memberId: normalizedMemberId,
+      displayName: member.name.trim() || normalizedMemberId,
+      role: effectiveMemberRole(member),
+      runtimeType: member.runtimeType,
+      isLeader: member.isLeader,
+    });
+    const merged = {
+      ...(environmentDraft.overrides || {}),
+      ...(profileEnv || {}),
+    };
+    return Object.keys(merged).length > 0 ? merged : undefined;
+  };
+
   const handleOpenClawPreviewChange = useCallback(
     (
       preview: OpenClawConfigCompilePreview | null,
@@ -973,24 +795,31 @@ const CreateTeamPage: React.FC = () => {
       communication_mode: "leader_mediated",
       shared_storage_gb: sharedStorageGb,
       storage_class: storageClass.trim() || undefined,
-      members: members.map((member) => ({
-        member_id: normalizeMemberId(member.memberId),
-        name: member.name.trim() || undefined,
-        role: member.isLeader ? "leader" : member.role.trim() || "member",
-        mode: member.instanceMode,
-        instance_mode: member.instanceMode,
-        runtime_type: member.runtimeType,
-        description: member.description.trim() || undefined,
-        is_leader: member.isLeader,
-        cpu_cores: member.cpuCores,
-        memory_gb: member.memoryGb,
-        disk_gb: member.diskGb,
-        gpu_enabled: member.gpuEnabled,
-        gpu_count: member.gpuEnabled ? member.gpuCount : 0,
-        image_registry: member.image.trim(),
-        environment_overrides: environmentDraft.overrides,
-        openclaw_config_plan: openClawConfigPlan,
-      })),
+      members: members.map((member) => {
+        const normalizedMemberId = normalizeMemberId(member.memberId);
+        const memberDescription = effectiveMemberDescription(member);
+        return {
+          member_id: normalizedMemberId,
+          name: member.name.trim() || undefined,
+          role: effectiveMemberRole(member),
+          mode: member.instanceMode,
+          instance_mode: member.instanceMode,
+          runtime_type: member.runtimeType,
+          description: memberDescription || undefined,
+          is_leader: member.isLeader,
+          cpu_cores: member.cpuCores,
+          memory_gb: member.memoryGb,
+          disk_gb: member.diskGb,
+          gpu_enabled: member.gpuEnabled,
+          gpu_count: member.gpuEnabled ? member.gpuCount : 0,
+          image_registry: member.image.trim(),
+          environment_overrides: buildMemberEnvironmentOverrides(
+            member,
+            normalizedMemberId,
+          ),
+          openclaw_config_plan: openClawConfigPlan,
+        };
+      }),
     };
 
     try {
@@ -1058,6 +887,29 @@ const CreateTeamPage: React.FC = () => {
                     rows={3}
                     className="mt-1 block w-full rounded-xl border border-[#eadfd8] px-3 py-2 text-sm focus:border-[#ef4444] focus:outline-none focus:ring-1 focus:ring-[#f3d2c2]"
                   />
+                </label>
+                <label className="block md:col-span-2">
+                  <span className="text-sm font-medium text-gray-700">
+                    协作模式
+                  </span>
+                  <select
+                    value={communicationMode}
+                    disabled
+                    className="mt-1 block w-full cursor-not-allowed rounded-xl border border-[#eadfd8] bg-gray-50 px-3 py-2 text-sm text-gray-700"
+                  >
+                    {TEAM_COMMUNICATION_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {
+                      TEAM_COMMUNICATION_MODE_OPTIONS.find(
+                        (option) => option.value === communicationMode,
+                      )?.description
+                    }
+                  </p>
                 </label>
                 <label className="block md:col-span-2">
                   <span className="text-sm font-medium text-gray-700">
@@ -1311,6 +1163,13 @@ const CreateTeamPage: React.FC = () => {
                             {templateMember.image || "默认镜像"} ·{" "}
                             {templateMember.cpuCores}C/{templateMember.memoryGb}G
                           </div>
+                          {templateMember.agentProfileKey && (
+                            <div className="mt-1 truncate text-xs text-indigo-600">
+                              {getAgencyAgentProfile(templateMember.agentProfileKey)?.displayName ||
+                                getAgencyAgentProfile(templateMember.agentProfileKey)?.name ||
+                                templateMember.agentProfileKey}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -1456,9 +1315,10 @@ const CreateTeamPage: React.FC = () => {
                         <select
                           value={member.instanceMode}
                           onChange={(event) =>
-                            updateMember(member.id, {
-                              instanceMode: event.target.value as InstanceMode,
-                            })
+                            setMemberInstanceMode(
+                              member.id,
+                              event.target.value as InstanceMode,
+                            )
                           }
                           className="mt-1 block w-full rounded-xl border border-[#eadfd8] px-3 py-2 text-sm focus:border-[#ef4444] focus:outline-none focus:ring-1 focus:ring-[#f3d2c2]"
                         >
@@ -1482,16 +1342,59 @@ const CreateTeamPage: React.FC = () => {
                         >
                           {loadingImages ? (
                             <option value="">加载中...</option>
-                          ) : imageOptionsForRuntime(member.runtimeType).length === 0 ? (
+                          ) : imageOptionsForMember(
+                              member.runtimeType,
+                              member.instanceMode,
+                            ).length === 0 ? (
                             <option value="">暂无 {member.runtimeType} 镜像</option>
                           ) : (
-                            imageOptionsForRuntime(member.runtimeType).map((item) => (
+                            imageOptionsForMember(
+                              member.runtimeType,
+                              member.instanceMode,
+                            ).map((item) => (
                               <option key={imageOptionKey(item)} value={item.image}>
                                 {item.display_name || item.image}
                               </option>
                             ))
                           )}
                         </select>
+                      </label>
+                      <label className="block">
+                        <span className="text-sm font-medium text-gray-700">
+                          角色模板
+                        </span>
+                        <select
+                          value={member.agentProfileKey || ""}
+                          onChange={(event) => {
+                            const profile = getAgencyAgentProfile(event.target.value);
+                            updateMember(member.id, {
+                              agentProfileKey: event.target.value
+                                ? (event.target.value as AgencyAgentProfileKey)
+                                : undefined,
+                              role:
+                                profile && !member.isLeader && profile.roleHint !== "leader"
+                                  ? profile.roleHint
+                                  : member.role,
+                              description:
+                                profile && !member.description.trim()
+                                  ? profile.summary
+                                  : member.description,
+                            });
+                          }}
+                          className="mt-1 block w-full rounded-xl border border-[#eadfd8] px-3 py-2 text-sm focus:border-[#ef4444] focus:outline-none focus:ring-1 focus:ring-[#f3d2c2]"
+                        >
+                          <option value="">不使用</option>
+                          {AGENCY_AGENT_PROFILE_OPTIONS.map((profile) => (
+                            <option key={profile.key} value={profile.key}>
+                              {profile.displayName}
+                            </option>
+                          ))}
+                        </select>
+                        {member.agentProfileKey && (
+                          <p className="mt-1 truncate text-xs text-gray-500">
+                            {getAgencyAgentProfile(member.agentProfileKey)?.summary}
+                          </p>
+                        )}
                       </label>
                     </div>
 

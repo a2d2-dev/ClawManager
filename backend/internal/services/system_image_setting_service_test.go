@@ -93,15 +93,25 @@ func TestSystemImageSettingServiceListAllowsMultipleImagesPerType(t *testing.T) 
 		t.Fatalf("List returned error: %v", err)
 	}
 
-	openClawCount := 0
+	openClawDesktopCount := 0
+	openClawGatewayCount := 0
 	for _, item := range items {
-		if item.InstanceType == "openclaw" {
-			openClawCount++
+		if item.InstanceType != "openclaw" {
+			continue
+		}
+		switch item.RuntimeType {
+		case "desktop":
+			openClawDesktopCount++
+		case "gateway":
+			openClawGatewayCount++
 		}
 	}
 
-	if openClawCount != 2 {
-		t.Fatalf("expected 2 openclaw runtime images, got %d", openClawCount)
+	if openClawDesktopCount != 2 {
+		t.Fatalf("expected 2 openclaw desktop images, got %d", openClawDesktopCount)
+	}
+	if openClawGatewayCount != 1 {
+		t.Fatalf("expected openclaw gateway default to be backfilled, got %d", openClawGatewayCount)
 	}
 }
 
@@ -205,6 +215,52 @@ func TestSystemImageSettingServiceListIncludesHermesLiteDefault(t *testing.T) {
 	}
 }
 
+func TestSystemImageSettingServiceListBackfillsHermesProDefaultWhenLiteStored(t *testing.T) {
+	repo := &stubSystemImageSettingRepository{
+		items: []models.SystemImageSetting{
+			{
+				ID:           1,
+				InstanceType: "hermes",
+				RuntimeType:  "gateway",
+				DisplayName:  "Hermes Lite",
+				Image:        "registry/hermes-lite:stored",
+				IsEnabled:    true,
+			},
+		},
+		nextID: 1,
+	}
+	service := NewSystemImageSettingService(repo)
+
+	items, err := service.List()
+	if err != nil {
+		t.Fatalf("List returned error: %v", err)
+	}
+
+	foundLite := false
+	foundPro := false
+	for _, item := range items {
+		if item.InstanceType != "hermes" {
+			continue
+		}
+		if item.RuntimeType == "gateway" && item.Image == "registry/hermes-lite:stored" {
+			foundLite = true
+		}
+		if item.RuntimeType == "desktop" && item.Image == defaultSystemImageSettings["hermes"] {
+			foundPro = true
+			if item.DisplayName != "Hermes Pro" {
+				t.Fatalf("expected Hermes Pro display name, got %q", item.DisplayName)
+			}
+		}
+	}
+
+	if !foundLite {
+		t.Fatalf("expected stored hermes lite image to remain available")
+	}
+	if !foundPro {
+		t.Fatalf("expected missing hermes pro default image to be backfilled")
+	}
+}
+
 func TestSystemImageSettingServiceGetRuntimeImageForImageFallsBackToOpenClawGatewayDefault(t *testing.T) {
 	service := NewSystemImageSettingService(&stubSystemImageSettingRepository{})
 
@@ -217,6 +273,34 @@ func TestSystemImageSettingServiceGetRuntimeImageForImageFallsBackToOpenClawGate
 	}
 	if selection.Image != defaultGatewaySystemImageSettings["openclaw"] {
 		t.Fatalf("expected gateway image %q, got %q", defaultGatewaySystemImageSettings["openclaw"], selection.Image)
+	}
+}
+
+func TestSystemImageSettingServiceGetRuntimeImageForImageBackfillsHermesProDefaultWhenLiteStored(t *testing.T) {
+	repo := &stubSystemImageSettingRepository{
+		items: []models.SystemImageSetting{
+			{
+				ID:           1,
+				InstanceType: "hermes",
+				RuntimeType:  "gateway",
+				DisplayName:  "Hermes Lite",
+				Image:        "registry/hermes-lite:stored",
+				IsEnabled:    true,
+			},
+		},
+		nextID: 1,
+	}
+	service := NewSystemImageSettingService(repo)
+
+	selection, ok := service.GetRuntimeImageForImage("hermes", defaultSystemImageSettings["hermes"])
+	if !ok {
+		t.Fatalf("expected default hermes pro image to resolve")
+	}
+	if selection.RuntimeType != "desktop" {
+		t.Fatalf("expected runtime type desktop, got %q", selection.RuntimeType)
+	}
+	if selection.Image != defaultSystemImageSettings["hermes"] {
+		t.Fatalf("expected hermes pro image %q, got %q", defaultSystemImageSettings["hermes"], selection.Image)
 	}
 }
 

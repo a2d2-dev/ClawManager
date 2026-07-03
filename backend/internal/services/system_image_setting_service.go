@@ -122,23 +122,12 @@ func (s *systemImageSettingService) List() ([]models.SystemImageSetting, error) 
 			continue
 		}
 
-		for _, item := range items {
-			if item.IsEnabled {
-				settings = append(settings, item)
-			}
-		}
+		settings = append(settings, enabledSystemImageSettingsForType(instanceType, items)...)
 		delete(byType, instanceType)
 	}
 
 	for instanceType, items := range byType {
-		for _, item := range items {
-			if item.IsEnabled {
-				if strings.TrimSpace(item.DisplayName) == "" {
-					item.DisplayName = displayNameForSystemImageType(instanceType)
-				}
-				settings = append(settings, item)
-			}
-		}
+		settings = append(settings, enabledSystemImageSettingsForType(instanceType, items)...)
 	}
 
 	return settings, nil
@@ -244,10 +233,7 @@ func (s *systemImageSettingService) GetRuntimeImage(instanceType string) (Runtim
 		return RuntimeImageConfig{}, false
 	}
 
-	for _, item := range items {
-		if !item.IsEnabled {
-			continue
-		}
+	for _, item := range enabledSystemImageSettingsForType(normalizedType, items) {
 		image := strings.TrimSpace(item.Image)
 		if image != "" {
 			return RuntimeImageConfig{
@@ -282,10 +268,7 @@ func (s *systemImageSettingService) GetRuntimeImageForImage(instanceType, image 
 		return RuntimeImageConfig{}, false
 	}
 
-	for _, item := range items {
-		if !item.IsEnabled {
-			continue
-		}
+	for _, item := range enabledSystemImageSettingsForType(normalizedType, items) {
 		if strings.TrimSpace(item.Image) == normalizedImage {
 			return RuntimeImageConfig{
 				Image:       normalizedImage,
@@ -357,6 +340,39 @@ func defaultSystemImagePresetsForType(instanceType string) []models.SystemImageS
 	}
 
 	return settings
+}
+
+func enabledSystemImageSettingsForType(instanceType string, stored []models.SystemImageSetting) []models.SystemImageSetting {
+	if len(stored) == 0 {
+		return defaultSystemImagePresetsForType(instanceType)
+	}
+
+	hasEnabled := false
+	runtimeTypesWithRows := map[string]bool{}
+	result := make([]models.SystemImageSetting, 0, len(stored)+2)
+	for _, item := range stored {
+		item.RuntimeType = normalizeSystemImageRuntimeType(item.RuntimeType)
+		runtimeTypesWithRows[item.RuntimeType] = true
+		if strings.TrimSpace(item.DisplayName) == "" {
+			item.DisplayName = displayNameForSystemImagePreset(instanceType, item.RuntimeType)
+		}
+		if item.IsEnabled {
+			hasEnabled = true
+			result = append(result, item)
+		}
+	}
+
+	if !hasEnabled {
+		return result
+	}
+
+	for _, preset := range defaultSystemImagePresetsForType(instanceType) {
+		if runtimeTypesWithRows[preset.RuntimeType] || !preset.IsEnabled || strings.TrimSpace(preset.Image) == "" {
+			continue
+		}
+		result = append(result, preset)
+	}
+	return result
 }
 
 func isSupportedSystemImageType(instanceType string) bool {

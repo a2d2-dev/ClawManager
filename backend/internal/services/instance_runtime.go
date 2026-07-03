@@ -63,6 +63,7 @@ func buildRuntimeConfig(instanceType, osType, osVersion string, registry, tag *s
 		config.Port = 3001
 		config.MountPath = "/config"
 		config.Env = defaultWebtopDesktopEnv("Hermes Runtime")
+		config.Env["HERMES_HOME"] = "/config/.hermes"
 	case "openclaw":
 		config.MountPath = "/config"
 		if (registry == nil || strings.TrimSpace(*registry) == "") && (tag == nil || strings.TrimSpace(*tag) == "") {
@@ -106,7 +107,9 @@ func defaultEnvForInstanceType(instanceType string) map[string]string {
 	case "ubuntu", "webtop", "openclaw":
 		return defaultWebtopDesktopEnv("ClawManager Desktop")
 	case "hermes":
-		return defaultWebtopDesktopEnv("Hermes Runtime")
+		env := defaultWebtopDesktopEnv("Hermes Runtime")
+		env["HERMES_HOME"] = "/config/.hermes"
+		return env
 	default:
 		return map[string]string{}
 	}

@@ -226,7 +226,7 @@ func (s *CleanupService) deleteAllPVs(ctx context.Context, userID, instanceID in
 
 	// If userID is specified, try to delete the predictable PV name first
 	if userID > 0 {
-		pvName := fmt.Sprintf("clawreef-pv-user-%d-instance-%d", userID, instanceID)
+		pvName := s.client.GetInstancePVName(userID, instanceID)
 		fmt.Printf("Deleting PV: %s\n", pvName)
 		if err := s.client.Clientset.CoreV1().PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{}); err != nil {
 			// Ignore not found error

@@ -5,6 +5,8 @@ import type {
   TeamDetails,
   TeamEventsHistoryResponse,
   TeamListResponse,
+  TeamWorkspaceListResponse,
+  TeamWorkspacePreviewResponse,
   TeamTask,
   TeamTasksHistoryResponse,
 } from "../types/team";
@@ -66,5 +68,70 @@ export const teamService = {
 
   deleteMember: async (teamId: number, memberId: number | string): Promise<void> => {
     await api.delete(`/teams/${teamId}/members/${memberId}`);
+  },
+
+  listWorkspaceFiles: async (
+    teamId: number,
+    path: string = "",
+  ): Promise<TeamWorkspaceListResponse> => {
+    const response = await api.get(`/teams/${teamId}/workspace/files`, {
+      params: { path },
+    });
+    return response.data.data;
+  },
+
+  previewWorkspaceFile: async (
+    teamId: number,
+    path: string,
+  ): Promise<TeamWorkspacePreviewResponse> => {
+    const response = await api.get(`/teams/${teamId}/workspace/preview`, {
+      params: { path },
+    });
+    return response.data.data;
+  },
+
+  downloadWorkspaceFile: async (teamId: number, path: string): Promise<Blob> => {
+    const response = await api.get(`/teams/${teamId}/workspace/download`, {
+      params: { path },
+      responseType: "blob",
+    });
+    return response.data;
+  },
+
+  createWorkspaceFolder: async (
+    teamId: number,
+    data: { path: string; name: string },
+  ): Promise<void> => {
+    await api.post(`/teams/${teamId}/workspace/folders`, data);
+  },
+
+  renameWorkspaceEntry: async (
+    teamId: number,
+    data: { path: string; new_name: string },
+  ): Promise<void> => {
+    await api.post(`/teams/${teamId}/workspace/rename`, data);
+  },
+
+  deleteWorkspaceEntry: async (teamId: number, path: string): Promise<void> => {
+    await api.delete(`/teams/${teamId}/workspace/files`, {
+      params: { path },
+    });
+  },
+
+  uploadWorkspaceFiles: async (
+    teamId: number,
+    path: string,
+    files: File[],
+    relativePaths?: string[],
+  ): Promise<void> => {
+    const formData = new FormData();
+    formData.append("path", path);
+    files.forEach((file, index) => {
+      formData.append("files", file);
+      formData.append("relative_paths", relativePaths?.[index] || file.name);
+    });
+    await api.post(`/teams/${teamId}/workspace/upload`, formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
   },
 };

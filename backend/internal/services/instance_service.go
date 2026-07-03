@@ -160,15 +160,16 @@ type CreateInstanceRequest struct {
 }
 
 type TeamInstanceConfig struct {
-	Environment     map[string]string
-	SecretName      string
-	SharedPVCName   string
-	SharedMountPath string
-	ConfigMapName   string
-	ConfigMountPath string
-	SharedUID       int64
-	SharedGID       int64
-	SharedUmask     string
+	Environment      map[string]string
+	SecretName       string
+	SharedPVCName    string
+	SharedMountPath  string
+	ConfigMapName    string
+	ConfigMountPath  string
+	PersonaConfigKey string
+	SharedUID        int64
+	SharedGID        int64
+	SharedUmask      string
 }
 
 type instanceModeLimitConfig struct {
@@ -558,6 +559,15 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 				MountPath:     strings.TrimSpace(req.Team.ConfigMountPath),
 				ReadOnly:      true,
 				AsDirectory:   true,
+			})
+		}
+		if strings.TrimSpace(req.Team.ConfigMapName) != "" && strings.TrimSpace(req.Team.PersonaConfigKey) != "" && strings.EqualFold(instance.Type, "hermes") {
+			configMapFileMounts = append(configMapFileMounts, k8s.ConfigMapFileMount{
+				Name:          "team-persona",
+				ConfigMapName: strings.TrimSpace(req.Team.ConfigMapName),
+				Key:           strings.TrimSpace(req.Team.PersonaConfigKey),
+				MountPath:     teamHermesSoulMountPath,
+				ReadOnly:      true,
 			})
 		}
 	}
