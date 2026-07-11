@@ -113,6 +113,9 @@ func TestRuntimeSchedulerAssignsCreatingInstanceToReadyPod(t *testing.T) {
 	if got := len(events.published); got != 1 {
 		t.Fatalf("published events = %d, want 1", got)
 	}
+	if events.published[0].eventType != "runtime.instance.running" {
+		t.Fatalf("published event = %q, want runtime.instance.running", events.published[0].eventType)
+	}
 }
 
 func TestRuntimeSchedulerPassesGatewayEnvironmentToRuntimeAgent(t *testing.T) {
@@ -196,6 +199,10 @@ func TestRuntimeSchedulerPassesGatewayEnvironmentToRuntimeAgent(t *testing.T) {
 	}
 	if env["CLAWMANAGER_LLM_MODEL"] != `["auto","gpt-5.5"]` {
 		t.Fatalf("CLAWMANAGER_LLM_MODEL = %q", env["CLAWMANAGER_LLM_MODEL"])
+	}
+	state := instanceRepo.runtimeStates[68]
+	if state.status != "creating" || state.generation != 4 || state.message == nil || !strings.Contains(*state.message, "gateway starting") {
+		t.Fatalf("runtime state after starting gateway = %+v, want creating with startup message", state)
 	}
 }
 
@@ -736,6 +743,49 @@ func TestRuntimeSchedulerSkipsCreatingInstanceWithExistingBinding(t *testing.T) 
 	}
 	if podRepo.claims[9] != 0 {
 		t.Fatalf("pod claims = %d, want 0", podRepo.claims[9])
+	}
+}
+
+func TestRuntimeSchedulerSyncsCreatingInstanceFromRunningBinding(t *testing.T) {
+	ctx := context.Background()
+	workspacePath := "/workspaces/openclaw/user-1/instance-25"
+	instanceRepo := newFakeRuntimeInstanceRepo()
+	instanceRepo.creating = []models.Instance{{
+		ID:                25,
+		UserID:            1,
+		Type:              RuntimeTypeOpenClaw,
+		RuntimeType:       RuntimeBackendGateway,
+		InstanceMode:      InstanceModeLite,
+		Status:            "creating",
+		WorkspacePath:     &workspacePath,
+		RuntimeGeneration: 2,
+	}}
+	bindingRepo := newFakeRuntimeBindingRepo()
+	bindingRepo.bindings[25] = &models.InstanceRuntimeBinding{
+		InstanceID:  25,
+		RuntimeType: RuntimeTypeOpenClaw,
+		State:       "running",
+		Generation:  2,
+	}
+	scheduler := NewRuntimeScheduler(
+		instanceRepo,
+		&fakeRuntimePodRepo{},
+		bindingRepo,
+		&fakeRuntimeRolloutRepo{},
+		&fakeRuntimeAgentClient{},
+		NewRuntimeEventService(nil),
+		nil,
+		&fakeRuntimeDeploymentService{},
+		time.Second,
+	)
+
+	if err := scheduler.reconcile(ctx); err != nil {
+		t.Fatalf("reconcile returned error: %v", err)
+	}
+
+	state := instanceRepo.runtimeStates[25]
+	if state.status != "running" || state.generation != 2 || state.message != nil {
+		t.Fatalf("expected instance to sync to running from binding, got %+v", state)
 	}
 }
 

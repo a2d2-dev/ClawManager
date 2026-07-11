@@ -507,6 +507,9 @@ func (s *RuntimeScheduler) reconcile(ctx context.Context) error {
 				continue
 			}
 			if binding != nil {
+				if err := s.syncInstanceStateFromBinding(ctx, instance, binding); err != nil {
+					errs = append(errs, fmt.Errorf("sync creating instance %d from binding: %w", instance.ID, err))
+				}
 				continue
 			}
 			if err := s.assignInstance(ctx, instance); err != nil {
@@ -536,6 +539,9 @@ func (s *RuntimeScheduler) reconcile(ctx context.Context) error {
 				continue
 			}
 			if binding != nil {
+				if err := s.syncInstanceStateFromBinding(ctx, instance, binding); err != nil {
+					errs = append(errs, fmt.Errorf("sync desired instance %d from binding: %w", instance.ID, err))
+				}
 				continue
 			}
 			binding, err = s.bindingRepo.GetByInstanceID(ctx, instance.ID)
@@ -544,6 +550,9 @@ func (s *RuntimeScheduler) reconcile(ctx context.Context) error {
 				continue
 			}
 			if binding != nil {
+				if err := s.syncInstanceStateFromBinding(ctx, instance, binding); err != nil {
+					errs = append(errs, fmt.Errorf("sync desired instance %d from binding: %w", instance.ID, err))
+				}
 				continue
 			}
 			if assignErr := s.assignInstance(ctx, instance); assignErr != nil {
@@ -556,6 +565,33 @@ func (s *RuntimeScheduler) reconcile(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (s *RuntimeScheduler) syncInstanceStateFromBinding(ctx context.Context, instance models.Instance, binding *models.InstanceRuntimeBinding) error {
+	if s == nil || s.instanceRepo == nil || binding == nil {
+		return nil
+	}
+	state := strings.ToLower(strings.TrimSpace(binding.State))
+	switch state {
+	case "running", "ready", "healthy":
+		if strings.EqualFold(strings.TrimSpace(instance.Status), "running") && instance.RuntimeErrorMessage == nil {
+			return nil
+		}
+		return s.instanceRepo.UpdateRuntimeState(ctx, instance.ID, "running", maxInt(instance.RuntimeGeneration, binding.Generation), nil)
+	case "error", "failed":
+		message := "runtime gateway failed"
+		if binding.ErrorMessage != nil && strings.TrimSpace(*binding.ErrorMessage) != "" {
+			message = strings.TrimSpace(*binding.ErrorMessage)
+		}
+		if strings.EqualFold(strings.TrimSpace(instance.Status), "error") &&
+			instance.RuntimeErrorMessage != nil &&
+			strings.TrimSpace(*instance.RuntimeErrorMessage) == message {
+			return nil
+		}
+		return s.instanceRepo.UpdateRuntimeState(ctx, instance.ID, "error", maxInt(instance.RuntimeGeneration, binding.Generation), &message)
+	default:
+		return nil
+	}
 }
 
 func (s *RuntimeScheduler) failoverStalePods(ctx context.Context) error {
@@ -745,6 +781,7 @@ func (s *RuntimeScheduler) createGatewayOnPod(ctx context.Context, instance mode
 	}
 
 	now := time.Now().UTC()
+	gatewayState := normalizeRuntimeGatewayCreateState(resp.Status)
 	binding := &models.InstanceRuntimeBinding{
 		InstanceID:    instance.ID,
 		RuntimePodID:  pod.ID,
@@ -753,9 +790,11 @@ func (s *RuntimeScheduler) createGatewayOnPod(ctx context.Context, instance mode
 		GatewayPort:   resp.Port,
 		GatewayPID:    resp.PID,
 		WorkspacePath: workspacePath,
-		State:         "running",
+		State:         gatewayState,
 		Generation:    instance.RuntimeGeneration,
-		LastHealthAt:  &now,
+	}
+	if gatewayState == "running" {
+		binding.LastHealthAt = &now
 	}
 	if err := s.bindingRepo.Create(ctx, binding); err != nil {
 		return s.cleanupGatewayAfterAssignFailure(ctx, endpoint, instance.ID, resp.GatewayID, false, err)
@@ -763,16 +802,29 @@ func (s *RuntimeScheduler) createGatewayOnPod(ctx context.Context, instance mode
 	if err := s.instanceRepo.SetWorkspacePath(ctx, instance.ID, workspacePath); err != nil {
 		return s.cleanupGatewayAfterAssignFailure(ctx, endpoint, instance.ID, resp.GatewayID, true, err)
 	}
-	if err := s.instanceRepo.UpdateRuntimeState(ctx, instance.ID, "running", instance.RuntimeGeneration, nil); err != nil {
+	instanceState := "creating"
+	var stateMessage *string
+	if gatewayState == "running" {
+		instanceState = "running"
+	} else {
+		message := "runtime gateway starting"
+		stateMessage = &message
+	}
+	if err := s.instanceRepo.UpdateRuntimeState(ctx, instance.ID, instanceState, instance.RuntimeGeneration, stateMessage); err != nil {
 		return s.cleanupGatewayAfterAssignFailure(ctx, endpoint, instance.ID, resp.GatewayID, true, err)
 	}
 	if s.events != nil {
-		if err := s.events.Publish(ctx, "runtime.instance.running", map[string]any{
+		eventType := "runtime.instance.starting"
+		if gatewayState == "running" {
+			eventType = "runtime.instance.running"
+		}
+		if err := s.events.Publish(ctx, eventType, map[string]any{
 			"instance_id":    instance.ID,
 			"runtime_type":   runtimeType,
 			"runtime_pod_id": pod.ID,
 			"gateway_id":     resp.GatewayID,
 			"gateway_port":   resp.Port,
+			"gateway_state":  gatewayState,
 			"workspace_path": workspacePath,
 			"generation":     instance.RuntimeGeneration,
 		}); err != nil {
@@ -780,6 +832,15 @@ func (s *RuntimeScheduler) createGatewayOnPod(ctx context.Context, instance mode
 		}
 	}
 	return nil
+}
+
+func normalizeRuntimeGatewayCreateState(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "running", "ready", "healthy":
+		return "running"
+	default:
+		return "starting"
+	}
 }
 
 func runtimeGatewayLinuxIDs(instanceID int, environment map[string]string) (int, int) {
@@ -874,6 +935,13 @@ func isRecoverableRuntimeSchedulingError(instance models.Instance) bool {
 
 func minInt(a, b int) int {
 	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
 		return a
 	}
 	return b

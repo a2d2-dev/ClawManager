@@ -1,7 +1,9 @@
 ﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MonitorUp } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import UserLayout from "../../components/UserLayout";
 import { useAuth } from "../../contexts/AuthContext";
+import { getTeamMemberDisplayDescription } from "../../lib/teamTemplates";
 import { teamService } from "../../services/teamService";
 import type {
   TeamDetails,
@@ -95,6 +97,54 @@ const mergeByIdDesc = <T extends { id: number }>(...groups: T[][]) => {
   for (const group of groups) {
     for (const item of group) {
       merged.set(item.id, item);
+    }
+  }
+  return [...merged.values()].sort((a, b) => b.id - a.id);
+};
+
+const taskStateRank: Record<TeamTask["status"], number> = {
+  pending: 0,
+  dispatched: 1,
+  running: 2,
+  stale: 3,
+  failed: 4,
+  succeeded: 5,
+};
+
+const taskStateTimestamp = (task: TeamTask) => {
+  const values = [
+    task.updated_at,
+    task.finished_at,
+    task.started_at,
+    task.dispatched_at,
+    task.created_at,
+  ];
+  return values.reduce((latest, value) => {
+    if (!value) {
+      return latest;
+    }
+    const timestamp = new Date(value).getTime();
+    return Number.isNaN(timestamp) ? latest : Math.max(latest, timestamp);
+  }, 0);
+};
+
+const shouldReplaceTaskState = (current: TeamTask, candidate: TeamTask) => {
+  const currentTime = taskStateTimestamp(current);
+  const candidateTime = taskStateTimestamp(candidate);
+  if (candidateTime !== currentTime) {
+    return candidateTime > currentTime;
+  }
+  return taskStateRank[candidate.status] >= taskStateRank[current.status];
+};
+
+const mergeTasksByLatestState = (...groups: TeamTask[][]) => {
+  const merged = new Map<number, TeamTask>();
+  for (const group of groups) {
+    for (const task of group) {
+      const current = merged.get(task.id);
+      if (!current || shouldReplaceTaskState(current, task)) {
+        merged.set(task.id, task);
+      }
     }
   }
   return [...merged.values()].sort((a, b) => b.id - a.id);
@@ -265,6 +315,30 @@ const eventVerb = (eventType: string) => {
       return "开始执行";
     case "task_progress":
       return "进度更新";
+    case "leader_plan":
+      return "执行计划";
+    case "worker_plan":
+      return "成员计划";
+    case "worker_progress":
+      return "成员进度";
+    case "assignment_heartbeat":
+      return "运行心跳";
+    case "assignment_check_requested":
+      return "自动检查";
+    case "assignment_check_result":
+      return "检查反馈";
+    case "leader_synthesis":
+      return "汇总整理";
+    case "completion_candidate":
+      return "候选结果";
+    case "completion_validation_warning":
+      return "产物校验";
+    case "assignment_recovery_started":
+      return "自动恢复";
+    case "assignment_reissued":
+      return "重新派发";
+    case "assignment_recovery_exhausted":
+      return "需要处理";
     case "task_assigned":
       return "任务转派";
     case "peer_request":
@@ -295,8 +369,11 @@ const eventTone = (eventType: string) => {
   if (eventType === "task_failed" || eventType === "message_failed" || eventType === "dlq" || eventType === "blocker") {
     return "border-red-200 bg-red-50 text-red-700";
   }
-  if (eventType === "task_stale") {
+  if (eventType === "task_stale" || eventType === "assignment_check_requested" || eventType === "assignment_recovery_started" || eventType === "assignment_reissued") {
     return "border-yellow-200 bg-yellow-50 text-yellow-700";
+  }
+  if (eventType === "assignment_heartbeat" || eventType === "assignment_check_result" || eventType === "leader_plan" || eventType === "worker_plan" || eventType === "worker_progress" || eventType === "leader_synthesis") {
+    return "border-sky-200 bg-sky-50 text-sky-700";
   }
   if (eventType.startsWith("peer_")) {
     return "border-violet-200 bg-violet-50 text-violet-700";
@@ -409,6 +486,22 @@ const isUserQuestionAnchorGroup = (group: CollaborationGroup) => {
     return false;
   }
   return true;
+};
+
+const isControlPlaneTeamTask = (task?: TeamTask) => {
+  if (!task) {
+    return false;
+  }
+  const messageId = (task.message_id || "").toLowerCase();
+  const origin = payloadText(task.payload, ["origin", "source"]).toLowerCase();
+  const intent = payloadText(task.payload, ["intent"]).toLowerCase();
+  const executionMode = payloadText(task.payload, ["executionMode", "execution_mode"]).toLowerCase();
+  return (
+    messageId.includes("bootstrap-introduction") ||
+    origin === "system_bootstrap" ||
+    intent === "team_bootstrap_introduction" ||
+    executionMode === "leader_control_plane_snapshot"
+  );
 };
 
 // Server ingestion order is authoritative. Runtime clocks can drift and Redis
@@ -544,13 +637,30 @@ const collaborationContent = (
   payload: Record<string, unknown>,
   eventType = "",
 ) => {
-  if (isTerminalResultEventType(eventType)) {
+  const eventKind = payloadText(payload, ["eventKind", "event_kind", "kind"]).toLowerCase();
+  const isBusinessResult =
+    isTerminalResultEventType(eventType) ||
+    eventType === "completion_deferred" ||
+    eventKind === "completion_deferred" ||
+    payloadBool(payload, ["assignmentResultOnly", "assignment_result_only"]) === true;
+  if (isBusinessResult) {
     const fullResult = terminalResultText(payload);
     if (fullResult) {
       return fullResult;
     }
   }
   const step = payloadCollaborationStep(payload);
+  const fullBusinessBody = payloadText(step, ["content", "detail", "resultMarkdown", "result", "answer", "text", "message"]);
+  const businessNarrativeKinds = new Set([
+    "leader_plan", "worker_plan", "worker_progress", "leader_synthesis", "leader_synthesis_reminder", "leader_decision_reminder",
+    "agent_narrative", "agent_plan", "agent_assignment", "agent_handoff", "agent_progress", "agent_delivery", "agent_review", "agent_synthesis",
+  ]);
+  if (
+    fullBusinessBody &&
+    (businessNarrativeKinds.has(eventKind) || ["outbound", "team_send", "task_assigned", "peer_handoff", "peer_request", "peer_review_request"].includes(eventType))
+  ) {
+    return fullBusinessBody;
+  }
   const stepSummary = payloadText(step, isTerminalResultEventType(eventType) ? ["content", "detail", "summary"] : ["summary", "detail", "content"]);
   if (stepSummary) {
     return stepSummary;
@@ -617,7 +727,7 @@ const eventActorKey = (
 const inferGroupStatus = (items: CollaborationItem[], task?: TeamTask) => {
   if (task?.status) {
     if (task.status === "succeeded" && isDispatchOnlyResult(taskResultText(task))) {
-      return items.some((item) => item.eventType === "outbound" || item.eventType === "task_assigned" || isDispatchOnlyResult(item.content))
+      return items.some((item) => item.eventType === "outbound" || item.eventType === "task_assigned" || item.eventType === "team_send" || isDispatchOnlyResult(item.content))
         ? "dispatched"
         : "running";
     }
@@ -659,7 +769,7 @@ const inferGroupStatus = (items: CollaborationItem[], task?: TeamTask) => {
   ) {
     return "running";
   }
-  if (items.some((item) => item.eventType === "outbound" || item.eventType === "task_assigned")) {
+  if (items.some((item) => item.eventType === "outbound" || item.eventType === "task_assigned" || item.eventType === "team_send")) {
     return "dispatched";
   }
   return "observed";
@@ -866,7 +976,7 @@ const TeamDetailPage: React.FC = () => {
         }
         const data = await teamService.getTeam(teamId);
         setDetails(data);
-        setLoadedTasks((current) => mergeByIdDesc(data.tasks || [], current));
+        setLoadedTasks((current) => mergeTasksByLatestState(current, data.tasks || []));
         setLoadedEvents((current) => mergeByIdDesc(data.events || [], current));
         setHasMoreTasks((current) =>
           taskHistoryExhausted.current
@@ -946,21 +1056,6 @@ const TeamDetailPage: React.FC = () => {
     }
   };
 
-  const handleDeleteMember = async (member: TeamMember) => {
-    if (!teamId || !window.confirm(`删除成员「${member.member_key}」？`)) {
-      return;
-    }
-    try {
-      setActionLoading(`delete-member-${member.id}`);
-      await teamService.deleteMember(teamId, member.id);
-      await loadTeam({ background: true });
-    } catch (err: any) {
-      alert(err.response?.data?.error || "删除成员失败");
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
   const handlePreviewWorkspacePath = useCallback(
     async (workspacePath: string) => {
       if (!details?.team.id) {
@@ -1012,6 +1107,7 @@ const TeamDetailPage: React.FC = () => {
         payload: {
           title: taskTitle.trim() || "Team task",
           prompt: taskPrompt.trim(),
+          responseLocale: "zh-CN",
         },
       });
       setTaskPrompt("");
@@ -1039,7 +1135,7 @@ const TeamDetailPage: React.FC = () => {
           : Promise.resolve(null),
       ]);
       if (taskHistory) {
-        setLoadedTasks((current) => mergeByIdDesc(current, taskHistory.tasks || []));
+        setLoadedTasks((current) => mergeTasksByLatestState(current, taskHistory.tasks || []));
         setHasMoreTasks(taskHistory.has_more);
         taskHistoryExhausted.current = !taskHistory.has_more;
       }
@@ -1202,7 +1298,7 @@ const TeamDetailPage: React.FC = () => {
                     </th>
                     <th className="px-5 py-3">最后在线</th>
                     <th className="px-5 py-3">实例</th>
-                    <th className="px-5 py-3">操作</th>
+                    <th className="min-w-[140px] px-5 py-3">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#f1e7e1] bg-white">
@@ -1224,7 +1320,9 @@ const TeamDetailPage: React.FC = () => {
                         {member.instance_mode || "lite"}
                       </td>
                       <td className="min-w-[280px] max-w-md px-5 py-4">
-                        <DescriptionPreview text={member.description} />
+                        <DescriptionPreview
+                          text={getTeamMemberDisplayDescription(member.description)}
+                        />
                       </td>
                       <td className="px-5 py-4">
                         <span
@@ -1266,39 +1364,36 @@ const TeamDetailPage: React.FC = () => {
                           "-"
                         )}
                       </td>
-                      <td className="px-5 py-4">
+                      <td className="min-w-[140px] px-5 py-4">
                         <div className="flex flex-wrap gap-2">
                           {member.instance_id ? (
                             <Link
                               to={`/instances/${member.instance_id}`}
                               target="_blank"
                               rel="noreferrer"
-                              className="rounded-lg border border-[#eadfd8] bg-white px-3 py-1.5 text-xs font-medium text-[#5f5957] hover:bg-[#fff8f5]"
+                              className="group/desktop inline-flex min-w-[108px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-slate-300 bg-[linear-gradient(180deg,#ffffff,#e9eef3)] px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-[0_8px_18px_-14px_rgba(15,23,42,0.65)] transition-all duration-200 hover:-translate-y-0.5 hover:border-sky-300 hover:bg-[linear-gradient(180deg,#ffffff,#e1eef7)] hover:text-sky-700 hover:shadow-[0_12px_24px_-15px_rgba(14,116,144,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-300/45"
                             >
+                              <MonitorUp
+                                aria-hidden="true"
+                                className="h-3.5 w-3.5 transition-transform duration-200 group-hover/desktop:-translate-y-0.5"
+                                strokeWidth={1.8}
+                              />
                               访问桌面
                             </Link>
                           ) : (
                             <button
                               type="button"
                               disabled
-                              className="rounded-lg border border-[#eadfd8] bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-400"
+                              className="inline-flex min-w-[108px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full border border-slate-200 bg-[linear-gradient(180deg,#f8fafc,#edf1f5)] px-3.5 py-2 text-xs font-semibold text-slate-400"
                             >
+                              <MonitorUp
+                                aria-hidden="true"
+                                className="h-3.5 w-3.5"
+                                strokeWidth={1.8}
+                              />
                               访问桌面
                             </button>
                           )}
-                          <button
-                            type="button"
-                            disabled={
-                              member.role === "leader" ||
-                              actionLoading === `delete-member-${member.id}`
-                            }
-                            onClick={() => void handleDeleteMember(member)}
-                            className="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {actionLoading === `delete-member-${member.id}`
-                              ? "删除中..."
-                              : "删除"}
-                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1306,7 +1401,6 @@ const TeamDetailPage: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            <TeamConfigSummary details={details} />
           </section>
         </div>
 
@@ -1321,32 +1415,6 @@ const TeamDetailPage: React.FC = () => {
     </UserLayout>
   );
 };
-
-function TeamConfigSummary({ details }: { details: TeamDetails }) {
-  return (
-    <div className="border-t border-[#f1e7e1] bg-[#fffaf7] px-5 py-4">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold text-gray-900">团队配置概览</h3>
-        <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] font-medium text-slate-500">
-          Runtime
-        </span>
-      </div>
-      <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 xl:grid-cols-5">
-        <MetaRow label="通信模式" value={details.team.communication_mode} />
-        <MetaRow label="共享 PVC" value={details.team.shared_pvc_name || "-"} />
-        <MetaRow
-          label="命名空间"
-          value={details.team.shared_pvc_namespace || "-"}
-        />
-        <MetaRow label="StorageClass" value={details.team.storage_class || "-"} />
-        <MetaRow
-          label="Events ID"
-          value={details.team.redis_events_last_id}
-        />
-      </dl>
-    </div>
-  );
-}
 
 function TeamWorkspaceBrowser({
   teamId,
@@ -2248,20 +2316,25 @@ function InteractionProcessPanel({
   const rootWorkItems = group?.task
     ? workItems.filter((item) => item.root_task_id === group.task?.id)
     : [];
-  const authoritativeLeaderFlow = !peerRoot && rootWorkItems.length > 0;
+  const rootControlPlaneTask = isControlPlaneTeamTask(group?.task);
+  const leaderMediatedMode = isLeaderMediatedCommunicationMode(communicationMode);
+  const authoritativeLeaderFlow = leaderMediatedMode && !peerRoot && !!group?.task;
+  const leaderLedgerSummary = authoritativeLeaderFlow
+    ? summarizeLeaderWorkItems(rootWorkItems, group?.task?.status, rootControlPlaneTask)
+    : undefined;
   const progress = group
     ? authoritativeLeaderFlow
-      ? workItemProgress(rootWorkItems, group.task?.status)
+      ? leaderLedgerSummary?.progress || 0
       : processProgress(group, steps, visualStatus, peerRoot)
     : 0;
   const isTerminal = ["succeeded", "failed", "stale"].includes(visualStatus);
-  const statusText = processStatusText(visualStatus);
+  const statusText = workflowStatusText(group?.task?.workflow_state) || processStatusText(visualStatus);
   const title = group?.task ? taskTitleText(group.task) : group?.title || "等待任务";
   const queryText = group?.task
     ? taskPromptText(group.task) || group.title
     : group?.items.find((item) => item.content)?.content || "";
   const columns = authoritativeLeaderFlow
-    ? buildWorkItemKanbanColumns(rootWorkItems, memberById)
+    ? buildLeaderMediatedKanbanColumns(group, rootWorkItems, memberById, finalResult, rootControlPlaneTask)
     : buildKanbanColumns(group, steps, finalResult, visualStatus);
   const peerModel = peerRoot
     ? buildPeerCollaborationModel(group, steps, memberById, leaderMemberId)
@@ -2289,7 +2362,7 @@ function InteractionProcessPanel({
   const selectedCard =
     allCards.find((card) => card.id === selectedCardId) ||
     allCards.find((card) => card.id === defaultCardId);
-  const selectedDetailSize = kanbanDetailSizeForText(selectedCard?.summary || finalResult || "");
+  const selectedDetailSize = kanbanDetailSizeForText(selectedCard?.detail || selectedCard?.summary || finalResult || "");
   const leaderWorkspaceSize = peerMode
     ? "short"
     : leaderKanbanWorkspaceSize(selectedDetailSize, decompositionItems.length, columns);
@@ -2309,21 +2382,21 @@ function InteractionProcessPanel({
   }, [leaderWorkspaceSize, onDetailSizeChange, peerMode]);
   const progressStyle =
     visualStatus === "failed" || visualStatus === "stale"
-      ? "from-rose-500 via-orange-400 to-amber-400"
+      ? "from-rose-500 via-orange-400 to-amber-300"
       : isTerminal
-        ? "from-emerald-500 via-teal-400 to-cyan-400"
-        : "from-sky-500 via-indigo-500 to-violet-500";
+        ? "from-slate-400 via-cyan-400 to-emerald-400"
+        : "from-slate-500 via-sky-500 to-cyan-400";
   const routeMembers = group?.route || [];
 
   return (
-    <section className={`app-panel flex flex-col overflow-hidden rounded-[22px] border-slate-200 shadow-[0_24px_56px_-42px_rgba(15,23,42,0.7)] transition-[height] duration-300 ${heightClass || (compact ? (expanded ? "h-[760px]" : "h-[480px]") : "h-[420px]")}`}>
-      <div className={`bg-[linear-gradient(135deg,#111827,#1f2937_48%,#0f766e)] text-white ${compact ? "px-4 py-3" : "px-4 py-3.5"}`}>
-        <div className="flex items-start justify-between gap-3">
+    <section className={`app-panel cm-tech-panel flex flex-col overflow-hidden rounded-[22px] transition-[height] duration-300 ${heightClass || (compact ? (expanded ? "h-[760px]" : "h-[480px]") : "h-[420px]")}`}>
+      <div className={`cm-tech-header text-slate-800 ${compact ? "px-4 py-3" : "px-4 py-3.5"}`}>
+        <div className="relative z-[1] flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="relative flex h-2.5 w-2.5 shrink-0">
                 {group && !isTerminal && (
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-300 opacity-60" />
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-45" />
                 )}
                 <span
                   className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
@@ -2331,64 +2404,82 @@ function InteractionProcessPanel({
                       ? "bg-slate-400"
                       : isTerminal
                         ? "bg-emerald-300"
-                        : "bg-cyan-300"
+                        : "cm-tech-breathe bg-sky-500"
                   }`}
                 />
               </span>
-              <span className="truncate text-xs font-semibold uppercase tracking-[0.16em] text-cyan-100">
+              <span className="truncate text-xs font-semibold uppercase tracking-[0.18em] text-slate-600">
                 {peerRoot ? "Peer Collaboration" : "Execution Kanban"}
               </span>
-              <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-slate-200 ring-1 ring-white/15">
+              <span className="shrink-0 rounded-full bg-white/75 px-2 py-0.5 text-[11px] font-medium text-slate-600 shadow-sm ring-1 ring-slate-300/80 backdrop-blur">
                 {statusText}
               </span>
             </div>
             <div className="mt-2 text-sm font-semibold leading-5">{title}</div>
-            <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-300">
+            <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-600">
               {queryText || "用户提交 query 后，这里会展示拆解、执行和汇总。"}
             </div>
-            <div className="mt-1.5 flex max-w-full flex-nowrap items-center gap-1 overflow-hidden text-[10px] leading-4 text-cyan-100/80">
+            <div className="mt-1.5 flex max-w-full flex-nowrap items-center gap-1 overflow-hidden text-[10px] leading-4 text-slate-500">
               {routeMembers.length > 0 ? (
                 routeMembers.map((member, index) => (
                   <React.Fragment key={`${group?.key || "idle"}-header-route-${member}-${index}`}>
-                    {index > 0 && <span className="text-cyan-100/45">→</span>}
-                    <span className="max-w-[128px] truncate rounded-full bg-white/10 px-1.5 py-0.5 text-cyan-50 ring-1 ring-white/10">
+                    {index > 0 && <span className="text-slate-400">→</span>}
+                    <span className="max-w-[128px] truncate rounded-full bg-white/75 px-1.5 py-0.5 text-slate-600 shadow-sm ring-1 ring-slate-300/80 backdrop-blur">
                       {displayMemberName(member, memberByKey, leaderMemberId)}
                     </span>
                   </React.Fragment>
                 ))
               ) : (
-                <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-cyan-50 ring-1 ring-white/10">
+                <span className="rounded-full bg-white/75 px-1.5 py-0.5 text-slate-600 shadow-sm ring-1 ring-slate-300/80 backdrop-blur">
                   Idle
                 </span>
               )}
             </div>
           </div>
-          <div className="shrink-0 text-right">
-            <div className="text-xl font-semibold leading-none">{progress}%</div>
-            <div className="mt-1 text-[11px] text-slate-300">overall</div>
+          <div className="min-w-[150px] max-w-[176px] shrink-0 text-right">
+            {leaderLedgerSummary ? (
+              <>
+                <div title={leaderLedgerSummary.phase} className="truncate whitespace-nowrap text-sm font-semibold leading-5">
+                  {leaderLedgerSummary.phase}
+                </div>
+                <div title={leaderLedgerSummary.deliveryLabel || `成员交付 ${leaderLedgerSummary.delivered}/${leaderLedgerSummary.total}`} className="mt-1 truncate whitespace-nowrap text-[11px] text-slate-500">
+                  {leaderLedgerSummary.deliveryLabel || `成员交付 ${leaderLedgerSummary.delivered}/${leaderLedgerSummary.total}`}
+                </div>
+                {leaderLedgerSummary.artifactLabel && (
+                  <div title={leaderLedgerSummary.artifactLabel} className="mt-0.5 truncate whitespace-nowrap text-[11px] text-slate-500">
+                    {leaderLedgerSummary.artifactLabel}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="text-xl font-semibold leading-none">{progress}%</div>
+                <div className="mt-1 text-[11px] text-slate-500">overall</div>
+              </>
+            )}
             {compact && showToggle && (
               <button
                 type="button"
                 onClick={() => setExpanded(!expanded)}
-                className="mt-2 rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-slate-100 ring-1 ring-white/15 hover:bg-white/15"
+                className="mt-2 rounded-full bg-white/75 px-2 py-0.5 text-[11px] text-slate-600 shadow-sm ring-1 ring-slate-300/80 transition hover:bg-white hover:text-slate-900"
               >
                 {expanded ? "收起" : "展开"}
               </button>
             )}
           </div>
         </div>
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/15">
+        <div className="relative z-[1] mt-3 h-1.5 overflow-hidden rounded-full bg-slate-300/70 shadow-inner">
           <div
-            className={`h-full rounded-full bg-gradient-to-r ${progressStyle} transition-all duration-700`}
+            className={`cm-tech-progress h-full rounded-full bg-gradient-to-r ${progressStyle} shadow-[0_0_12px_rgba(56,189,248,0.45)] transition-all duration-700`}
             style={{ width: `${progress}%` }}
           />
         </div>
       </div>
 
-      <div className={`min-h-0 flex-1 bg-gradient-to-b from-white via-slate-50 to-white ${expanded ? "flex flex-col gap-2 overflow-hidden px-3 py-2.5" : "space-y-3 overflow-auto px-4 py-3"}`}>
+      <div className={`cm-tech-workspace min-h-0 flex-1 ${expanded ? "flex flex-col gap-2 overflow-hidden px-3 py-2.5" : "space-y-3 overflow-auto px-4 py-3"}`}>
         {compact && !expanded ? (
           <div className="space-y-3">
-            <div className="rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+            <div className="cm-tech-surface rounded-2xl p-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
@@ -2406,12 +2497,12 @@ function InteractionProcessPanel({
               </div>
               <div className="mt-3 space-y-2">
                 {decompositionItems.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-xs text-slate-400">
+                  <div className="cm-tech-subtle rounded-xl border-dashed px-3 py-4 text-center text-xs text-slate-400">
                     暂无拆解步骤
                   </div>
                 ) : (
                   decompositionItems.slice(0, 3).map((item) => (
-                    <div key={item.id} className="rounded-xl bg-slate-50 px-3 py-2">
+                    <div key={item.id} className="cm-tech-subtle rounded-xl px-3 py-2 transition duration-200 hover:-translate-y-0.5 hover:border-slate-400/70">
                       <div className="flex items-center justify-between gap-2">
                         <div className="min-w-0 truncate text-xs font-semibold text-slate-800">{item.title}</div>
                         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${item.badgeClass}`}>
@@ -2444,7 +2535,7 @@ function InteractionProcessPanel({
           onSelect={setSelectedCardId}
         />
 
-        <div className={`flex min-h-[112px] min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-2.5 shadow-sm ${kanbanDetailPanelMaxHeight(selectedDetailSize)}`}>
+        <div className={`cm-tech-surface flex min-h-[112px] min-w-0 flex-col overflow-hidden rounded-2xl p-2.5 ${kanbanDetailPanelMaxHeight(selectedDetailSize)}`}>
           <div className="mb-1.5 flex shrink-0 items-center justify-between gap-3">
             <div>
               <div className="text-xs font-semibold text-slate-800">
@@ -2483,8 +2574,8 @@ function InteractionProcessPanel({
           </>
         ) : (
           <>
-        <div className="shrink-0 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
-          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_92px]">
+        <div className="cm-tech-surface shrink-0 rounded-2xl p-2">
+          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(144px,172px)]">
             <div className="min-w-0">
               <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
                 总任务 Query
@@ -2492,7 +2583,7 @@ function InteractionProcessPanel({
               <div className="mt-1 line-clamp-1 text-xs leading-5 text-slate-700">
                 {queryText || "Idle，等待新的团队任务。"}
               </div>
-              <div className="mt-2 rounded-xl border border-slate-100 bg-slate-50/70 p-1.5">
+              <div className="cm-tech-subtle mt-2 rounded-xl p-1.5">
                 <div className="mb-1 flex items-center justify-between gap-2">
                   <span className="text-[11px] font-semibold text-slate-700">任务拆解</span>
                   <span className="text-[10px] text-slate-400">{decompositionItems.length} 项</span>
@@ -2506,7 +2597,7 @@ function InteractionProcessPanel({
                     {decompositionItems.map((item) => (
                       <div
                         key={item.id}
-                        className="rounded-lg bg-white px-2 py-1"
+                        className="rounded-lg border border-white/80 bg-white/75 px-2 py-1 shadow-[0_1px_4px_rgba(15,23,42,0.05)] transition duration-200 hover:border-sky-200/80 hover:bg-white"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <div className="min-w-0 truncate text-[11px] font-medium text-slate-700">
@@ -2525,12 +2616,25 @@ function InteractionProcessPanel({
                 )}
               </div>
             </div>
-            <div className="rounded-xl border border-slate-100 bg-slate-50 px-2.5 py-2">
-              <div className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusStyle(visualStatus)}`}>
+            <div className="cm-tech-subtle min-w-0 rounded-xl px-3 py-2">
+              <div title={statusText} className={`max-w-full truncate whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusStyle(visualStatus)}`}>
                 {statusText}
               </div>
-              <div className="mt-2 text-xl font-semibold leading-none text-slate-900">{progress}%</div>
-              <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">overall</div>
+              {leaderLedgerSummary ? (
+                <>
+                  <div title={leaderLedgerSummary.phase} className="mt-2 truncate whitespace-nowrap text-[13px] font-semibold leading-5 text-slate-900">
+                    {leaderLedgerSummary.phase}
+                  </div>
+                  <div title={`交付 ${leaderLedgerSummary.delivered}/${leaderLedgerSummary.total} · ${leaderLedgerSummary.blockers > 0 ? `${leaderLedgerSummary.blockers} 个阻塞` : "无阻塞"}`} className="mt-1 truncate whitespace-nowrap text-[10px] leading-4 text-slate-400">
+                    交付 {leaderLedgerSummary.delivered}/{leaderLedgerSummary.total} · {leaderLedgerSummary.blockers > 0 ? `${leaderLedgerSummary.blockers} 个阻塞` : "无阻塞"}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="mt-2 text-xl font-semibold leading-none text-slate-900">{progress}%</div>
+                  <div className="mt-1 text-[10px] uppercase tracking-[0.14em] text-slate-400">overall</div>
+                </>
+              )}
               <div className="mt-2 grid grid-cols-3 gap-1 text-center text-[10px]">
                 <KanbanCount label="T" value={kanbanCounts.todo} tone="todo" />
                 <KanbanCount label="D" value={kanbanCounts.doing} tone="doing" />
@@ -2569,7 +2673,7 @@ function InteractionProcessPanel({
           </div>
         </div>
 
-        <div className={`flex min-h-[112px] min-w-0 shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-2.5 shadow-sm ${kanbanDetailPanelMaxHeight(selectedDetailSize)}`}>
+        <div className={`cm-tech-surface flex min-h-[112px] min-w-0 shrink-0 flex-col overflow-hidden rounded-2xl p-2.5 ${kanbanDetailPanelMaxHeight(selectedDetailSize)}`}>
           <div className="mb-1.5 flex shrink-0 items-center justify-between gap-3">
             <div>
               <div className="text-xs font-semibold text-slate-800">
@@ -2715,6 +2819,10 @@ function isPeerCommunicationMode(mode?: string) {
   return normalized === "peer_assisted" || normalized === "full_mesh";
 }
 
+function isLeaderMediatedCommunicationMode(mode?: string) {
+  return (mode || "").trim().toLowerCase() === "leader_mediated";
+}
+
 function isRootTaskTargetLeader(
   group: CollaborationGroup | undefined,
   memberById: Map<number, TeamMember>,
@@ -2759,6 +2867,7 @@ type KanbanTaskCard = {
   column: KanbanColumnKey;
   title: string;
   summary: string;
+  detail?: string;
   owner: string;
   target?: string;
   eventType: string;
@@ -2768,6 +2877,16 @@ type KanbanTaskCard = {
 };
 
 type KanbanColumns = Record<KanbanColumnKey, KanbanTaskCard[]>;
+
+type LeaderLedgerSummary = {
+  phase: string;
+  delivered: number;
+  total: number;
+  blockers: number;
+  progress: number;
+  deliveryLabel?: string;
+  artifactLabel?: string;
+};
 
 type PeerLaneStatus = "idle" | "waiting" | "working" | "done" | "blocked";
 
@@ -2847,7 +2966,7 @@ function buildProcessSteps(
   }
 
   for (const item of group.items) {
-    if (isProtocolNoiseItem(item)) {
+    if (isProtocolNoiseItem(item) || isAssignmentHeartbeatItem(item)) {
       continue;
     }
     const stepMeta = item.collaborationStep;
@@ -2889,7 +3008,16 @@ function buildProcessSteps(
 function isProtocolNoiseItem(item: CollaborationItem) {
   const normalizedContent = item.content.trim().toLowerCase();
   const compact = normalizedContent.replace(/\s+/g, "");
+  const visibleRaw = payloadText(item.payload, ["visibleToChat", "visible_to_chat"]).toLowerCase();
+  const explicitlyHidden = ["false", "0", "no", "off"].includes(visibleRaw);
+  const chatPolicy = payloadText(item.payload, ["chatPolicy", "chat_policy"]).toLowerCase();
+  if (isBusinessChatItem(item)) {
+    return false;
+  }
   return (
+    chatPolicy === "hidden" ||
+    (explicitlyHidden && !["visible", "replaceable", "warning"].includes(chatPolicy)) ||
+    item.eventType === "member_result_confirmed" ||
     item.eventType === "inbound" ||
     normalizedContent === "inbound" ||
     compact === "teammessage" ||
@@ -2898,6 +3026,40 @@ function isProtocolNoiseItem(item: CollaborationItem) {
     normalizedContent === "redis team task processing completed" ||
     normalizedContent === "redis team task failed"
   );
+}
+
+function hasMeaningfulChatBody(item: CollaborationItem) {
+  const body = item.content.trim().toLowerCase().replace(/\s+/g, " ");
+  return Boolean(body) && ![
+    "inbound",
+    "task_received",
+    "task_started",
+    "redis team task received",
+    "redis team task started",
+    "redis team task processing completed",
+    "agent turn is still running",
+    "still running",
+    "status unchanged",
+    "no change",
+  ].includes(body);
+}
+
+function isBusinessChatItem(item: CollaborationItem) {
+  const eventKind = payloadText(item.payload, ["eventKind", "event_kind", "kind"]).toLowerCase();
+  const businessKinds = new Set([
+    "leader_plan", "worker_plan", "worker_progress", "leader_synthesis", "leader_synthesis_reminder", "leader_decision_reminder",
+    "agent_narrative", "agent_plan", "agent_assignment", "agent_handoff", "agent_progress", "agent_delivery", "agent_review", "agent_synthesis",
+    "completion_deferred", "completion_candidate", "completion_validation_warning", "assignment_recovery_started", "assignment_reissued", "assignment_recovery_exhausted",
+  ]);
+  if (businessKinds.has(eventKind)) {
+    return hasMeaningfulChatBody(item);
+  }
+  if (payloadBool(item.payload, ["leaderDispatchOnly", "leader_dispatch_only", "assignmentResultOnly", "assignment_result_only"]) === true) {
+    return hasMeaningfulChatBody(item);
+  }
+  return [
+    "outbound", "team_send", "task_assigned", "peer_request", "peer_handoff", "peer_review_request", "peer_reply", "reply", "completion_proposed", "task_completed", "completion", "message_warning", "task_progress", "progress",
+  ].includes(item.eventType) && hasMeaningfulChatBody(item);
 }
 
 function buildKanbanColumns(
@@ -2913,7 +3075,7 @@ function buildKanbanColumns(
   const cardByWorkKey = new Map<string, KanbanTaskCard>();
   const delegatedTargets = steps
     .filter((step) =>
-      (step.eventType === "task_assigned" || step.eventType === "outbound") &&
+      (step.eventType === "task_assigned" || step.eventType === "outbound" || step.eventType === "team_send" || step.eventType === "assignment") &&
       step.to &&
       !isLeaderLikeName(step.to),
     )
@@ -3044,6 +3206,9 @@ function buildWorkItemKanbanColumns(
 ): KanbanColumns {
   const columns: KanbanColumns = { todo: [], doing: [], done: [] };
   for (const item of workItems) {
+    if (isHeartbeatWorkItem(item)) {
+      continue;
+    }
     const column: KanbanColumnKey =
       item.status === "succeeded" || item.status === "failed" || item.status === "stale"
         ? "done"
@@ -3054,13 +3219,25 @@ function buildWorkItemKanbanColumns(
       ? memberById.get(item.owner_member_id)?.display_name || memberById.get(item.owner_member_id)?.member_key || "未分配"
       : "未分配";
     const resultSummary = item.result
-      ? payloadText(item.result, ["summary", "resultMarkdown", "result_markdown", "result", "text"])
+      ? payloadTextDeep(item.result, ["summary", "title", "status"])
+      : "";
+    const resultDetail = item.result
+      ? payloadTextDeep(item.result, [
+          "resultMarkdown",
+          "result_markdown",
+          "result",
+          "answer",
+          "text",
+          "message",
+          "summary",
+        ])
       : "";
     columns[column].push({
       id: `work-item-${item.id}`,
       column,
       title: item.title,
-      summary: resultSummary || (item.depends_on?.length ? `等待：${item.depends_on.join("、")}` : item.title),
+      summary: resultSummary || resultDetail || (item.depends_on?.length ? `等待：${item.depends_on.join("、")}` : item.title),
+      detail: resultDetail || resultSummary,
       owner,
       eventType:
         item.status === "succeeded"
@@ -3092,23 +3269,199 @@ function buildWorkItemKanbanColumns(
   return columns;
 }
 
-function workItemProgress(workItems: TeamWorkItem[], rootStatus?: TeamTask["status"]) {
-  if (rootStatus === "succeeded") {
-    return 100;
+function isTerminalWorkItem(item: TeamWorkItem) {
+  return item.status === "succeeded" || item.status === "failed" || item.status === "stale";
+}
+
+function isHeartbeatWorkItem(item: TeamWorkItem) {
+  const text = `${item.work_id} ${item.title}`.toLowerCase();
+  return text.includes("assignment_heartbeat") ||
+    text.includes("heartbeat") ||
+    text.includes("运行心跳");
+}
+
+function isLeaderWorkItem(item: TeamWorkItem, memberById: Map<number, TeamMember>) {
+  if (item.work_id === "leader-final-synthesis" || item.work_id.startsWith("assignment-leader-")) {
+    return true;
   }
-  if (rootStatus === "failed" || rootStatus === "stale") {
-    return 100;
+  const member = item.owner_member_id ? memberById.get(item.owner_member_id) : undefined;
+  const key = (member?.member_key || "").toLowerCase();
+  const role = (member?.role || "").toLowerCase();
+  return key === "leader" || role === "leader" || role.includes("leader");
+}
+
+function collapseLeaderMediatedWorkItems(
+  workItems: TeamWorkItem[],
+  memberById: Map<number, TeamMember>,
+  rootStatus?: TeamTask["status"],
+) {
+  let hasLeaderFinal = rootStatus === "succeeded" || rootStatus === "failed" || rootStatus === "stale";
+  const latestByCurrentSlot = new Map<string, TeamWorkItem>();
+  for (const item of workItems) {
+    if (item.superseded_by) {
+      continue;
+    }
+    if (item.work_id === "leader-final-synthesis" && isTerminalWorkItem(item)) {
+      hasLeaderFinal = true;
+    }
+    const slotKey = isLeaderWorkItem(item, memberById)
+      ? `leader:${item.work_id}`
+      : item.owner_member_id
+        ? `owner:${item.owner_member_id}`
+        : `work:${item.assignment_id || item.canonical_work_id || item.work_id}`;
+    const previous = latestByCurrentSlot.get(slotKey);
+    if (
+      !previous ||
+      new Date(item.updated_at).getTime() > new Date(previous.updated_at).getTime() ||
+      (item.updated_at === previous.updated_at && item.id > previous.id)
+    ) {
+      latestByCurrentSlot.set(slotKey, item);
+    }
   }
+  return Array.from(latestByCurrentSlot.values()).filter((item) => {
+    if (!isTerminalWorkItem(item) && hasLeaderFinal && isLeaderWorkItem(item, memberById)) {
+      return false;
+    }
+    if (!isTerminalWorkItem(item) && item.work_id.startsWith("assignment-leader-")) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function buildLeaderMediatedKanbanColumns(
+  group: CollaborationGroup | undefined,
+  workItems: TeamWorkItem[],
+  memberById: Map<number, TeamMember>,
+  finalResult: string,
+  controlPlaneTask: boolean,
+): KanbanColumns {
+  if (workItems.length > 0) {
+    return buildWorkItemKanbanColumns(collapseLeaderMediatedWorkItems(workItems, memberById, group?.task?.status), memberById);
+  }
+  const columns: KanbanColumns = { todo: [], doing: [], done: [] };
+  const task = group?.task;
+  if (!task) {
+    return columns;
+  }
+  const terminal = task.status === "succeeded" || task.status === "failed" || task.status === "stale";
+  const column: KanbanColumnKey = terminal ? "done" : task.status === "pending" ? "todo" : "doing";
+  const detail =
+    finalResult ||
+    payloadTextDeep(task.result, ["resultMarkdown", "result_markdown", "result", "answer", "summary"]) ||
+    payloadTextDeep(task.payload, ["resultMarkdown", "result_markdown", "result", "answer", "summary"]);
+  const title = controlPlaneTask
+    ? "控制面快照"
+    : terminal
+      ? "Root 任务终态"
+      : "等待协作台账";
+  const summary = detail ||
+    (controlPlaneTask
+      ? task.status === "succeeded"
+        ? "团队介绍和 bootstrap 快照已生成。"
+        : task.status === "failed" || task.status === "stale"
+          ? task.error_message || "控制面快照未完成。"
+          : "Leader 正在生成团队介绍，不需要派发成员任务。"
+      : task.status === "succeeded"
+        ? "Root 任务已由后端标记完成。"
+        : task.status === "failed" || task.status === "stale"
+          ? task.error_message || "Root 任务未完成。"
+          : "后端尚未收到 assignment ledger；不会根据 raw events 推断进度。");
+  columns[column].push({
+    id: `leader-root-${task.id}`,
+    column,
+    title,
+    summary,
+    detail,
+    owner: "Leader",
+    eventType: task.status === "failed" || task.status === "stale"
+      ? "task_failed"
+      : task.status === "succeeded"
+        ? "task_completed"
+        : "task_progress",
+    time: new Date(task.updated_at || task.created_at).getTime(),
+    progress: task.status === "succeeded" ? 100 : undefined,
+    statusLabel:
+      task.status === "succeeded"
+        ? "已完成"
+        : task.status === "failed"
+          ? "失败"
+          : task.status === "stale"
+            ? "超时"
+            : controlPlaneTask
+              ? "生成中"
+              : "等待台账",
+  });
+  return columns;
+}
+
+function summarizeLeaderWorkItems(workItems: TeamWorkItem[], rootStatus?: TeamTask["status"], controlPlaneTask = false): LeaderLedgerSummary {
   if (workItems.length === 0) {
-    return 0;
+    if (controlPlaneTask) {
+      const completed = rootStatus === "succeeded";
+      const blocked = rootStatus === "failed" || rootStatus === "stale";
+      return {
+        phase: completed ? "已完成" : blocked ? "需要修复" : "Leader 执行中",
+        delivered: completed ? 1 : 0,
+        total: 0,
+        blockers: blocked ? 1 : 0,
+        progress: completed ? 100 : blocked ? 35 : 45,
+        deliveryLabel: "成员交付 无需派发",
+        artifactLabel: completed ? "产物 已生成" : blocked ? "产物 未通过" : "产物 等待生成",
+      };
+    }
+    const completed = rootStatus === "succeeded";
+    const blocked = rootStatus === "failed" || rootStatus === "stale";
+    return {
+      phase: completed ? "已完成" : blocked ? "需要修复" : "等待权威状态",
+      delivered: 0,
+      total: 0,
+      blockers: blocked ? 1 : 0,
+      progress: completed ? 100 : blocked ? 20 : 12,
+      deliveryLabel: "成员交付 等待台账",
+      artifactLabel: completed ? "产物 已记录" : blocked ? "产物 未通过" : "产物 未确认",
+    };
   }
-  const completed = workItems.filter((item) =>
-    ["succeeded", "failed", "stale"].includes(item.status),
-  ).length;
-  const running = workItems.filter((item) => item.status === "running").length;
-  const dispatched = workItems.filter((item) => item.status === "dispatched").length;
-  const weighted = ((completed + running * 0.55 + dispatched * 0.2) / workItems.length) * 92;
-  return Math.max(5, Math.min(92, Math.round(weighted)));
+  const memberItems = workItems.filter((item) => item.owner_member_id && item.work_id !== "leader-final-synthesis");
+  const owners = new Map<number, TeamWorkItem[]>();
+  for (const item of memberItems) {
+    if (!item.owner_member_id) {
+      continue;
+    }
+    const list = owners.get(item.owner_member_id) || [];
+    list.push(item);
+    owners.set(item.owner_member_id, list);
+  }
+  let delivered = 0;
+  let blockers = 0;
+  for (const list of owners.values()) {
+    if (list.some((item) => item.status === "failed" || item.status === "stale")) {
+      blockers += 1;
+      continue;
+    }
+    if (list.some((item) => item.status === "succeeded")) {
+      delivered += 1;
+    }
+  }
+  const total = owners.size;
+  const leaderFinal = workItems.some((item) => item.work_id === "leader-final-synthesis" && item.status === "succeeded");
+  let phase = "Leader 规划中";
+  if (rootStatus === "succeeded" || leaderFinal) {
+    phase = "已完成";
+  } else if (blockers > 0) {
+    phase = "需要修复";
+  } else if (total > 0 && delivered >= total) {
+    phase = "等待 Leader 汇总";
+  } else if (total > 0) {
+    phase = "等待成员交付";
+  }
+  const progress =
+    rootStatus === "succeeded" || leaderFinal
+      ? 100
+      : total > 0
+        ? Math.max(12, Math.min(90, Math.round(24 + (delivered / total) * 56 + (blockers > 0 ? 10 : 0))))
+        : 12;
+  return { phase, delivered, total, blockers, progress };
 }
 
 function buildPeerCollaborationModel(
@@ -3988,6 +4341,29 @@ function PeerCollaborationMatrix({
   );
 }
 
+function workflowStatusText(state?: string) {
+  switch ((state || "").toLowerCase()) {
+    case "planning":
+      return "Leader 正在规划";
+    case "executing":
+      return "阶段执行中";
+    case "awaiting_phase_results":
+      return "等待本阶段交付";
+    case "awaiting_leader_decision":
+      return "等待 Leader 决定下一阶段";
+    case "synthesizing":
+      return "Leader 正在汇总";
+    case "completion_pending":
+      return "等待完成确认";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    default:
+      return "";
+  }
+}
+
 function peerLaneStatusClass(status: PeerLaneStatus) {
   switch (status) {
     case "done":
@@ -4020,11 +4396,11 @@ function KanbanColumn({
 }) {
   const style = kanbanColumnStyle(tone);
   return (
-    <div className={`min-h-[138px] rounded-xl border p-1.5 ${style.shell}`}>
+    <div className={`min-h-[138px] rounded-xl border p-1.5 shadow-[0_10px_26px_-22px_rgba(15,23,42,0.5)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_16px_32px_-22px_rgba(15,23,42,0.48)] ${style.shell}`}>
       <div className="mb-1 flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
-            <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+            <span className={`h-1.5 w-1.5 rounded-full shadow-[0_0_8px_currentColor] ${style.dot}`} />
             <h3 className="text-[11px] font-semibold text-slate-900">{title}</h3>
           </div>
           <p className="mt-0.5 text-[10px] leading-3 text-slate-500">{subtitle}</p>
@@ -4036,7 +4412,7 @@ function KanbanColumn({
 
       <div className="max-h-[230px] space-y-1 overflow-y-auto pr-1">
         {cards.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-slate-200 bg-white/70 px-2 py-2.5 text-center text-[11px] leading-5 text-slate-400">
+          <div className="rounded-lg border border-dashed border-slate-300/80 bg-white/55 px-2 py-2.5 text-center text-[11px] leading-5 text-slate-400 backdrop-blur-sm">
             暂无卡片
           </div>
         ) : (
@@ -4068,8 +4444,8 @@ function KanbanCard({
     <button
       type="button"
       onClick={onSelect}
-      className={`group w-full rounded-lg border bg-white px-1.5 py-1 text-left text-xs shadow-sm transition duration-200 hover:-translate-y-0.5 hover:shadow-md ${
-        selected ? "border-slate-400 ring-2 ring-slate-200" : style.border
+      className={`group w-full rounded-lg border bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(241,245,249,0.9))] px-1.5 py-1 text-left text-xs shadow-[0_5px_14px_-12px_rgba(15,23,42,0.7)] transition duration-200 hover:-translate-y-0.5 hover:border-sky-300/80 hover:shadow-[0_10px_22px_-14px_rgba(14,116,144,0.5)] ${
+        selected ? "border-sky-400/80 ring-2 ring-sky-200/70" : style.border
       }`}
     >
       <div className="flex items-start gap-1.5">
@@ -4111,7 +4487,7 @@ function KanbanCardDetail({
 }) {
   const style = kanbanCardStyle(card);
   return (
-    <div className="flex min-h-0 flex-col rounded-xl border border-slate-100 bg-slate-50/80 p-2.5">
+    <div className="cm-tech-subtle flex min-h-0 flex-col rounded-xl p-2.5">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <div className="truncate text-xs font-semibold leading-5 text-slate-900">{card.title}</div>
@@ -4132,7 +4508,7 @@ function KanbanCardDetail({
       </div>
       <div className={`mt-2 min-h-0 overflow-auto pb-5 pr-1 text-xs leading-5 text-slate-700 ${kanbanDetailBodyMaxHeight(size)}`}>
         <MarkdownContent
-          text={card.summary || "暂无详情。"}
+          text={card.detail || card.summary || "暂无详情。"}
           compact
           onWorkspaceFileOpen={onWorkspaceFileOpen}
         />
@@ -4152,7 +4528,7 @@ function KanbanCount({
 }) {
   const style = kanbanColumnStyle(tone);
   return (
-    <div className={`rounded-lg px-1.5 py-1 ${style.count}`}>
+    <div className={`rounded-lg border px-1.5 py-1 shadow-[0_1px_0_rgba(255,255,255,0.9)_inset] ${style.count}`}>
       <div className="font-semibold leading-none">{value}</div>
       <div className="mt-0.5 opacity-75">{label}</div>
     </div>
@@ -4163,21 +4539,21 @@ function kanbanColumnStyle(tone: KanbanColumnKey) {
   switch (tone) {
     case "todo":
       return {
-        shell: "border-amber-100 bg-amber-50/55",
-        dot: "bg-amber-400",
-        count: "bg-amber-100 text-amber-700",
+        shell: "border-slate-300/80 bg-[linear-gradient(145deg,rgba(250,251,252,0.96),rgba(232,237,242,0.88))]",
+        dot: "bg-slate-400 text-slate-400",
+        count: "border-slate-300/80 bg-white/65 text-slate-600",
       };
     case "doing":
       return {
-        shell: "border-sky-100 bg-sky-50/60",
-        dot: "bg-sky-500",
-        count: "bg-sky-100 text-sky-700",
+        shell: "border-sky-200/80 bg-[linear-gradient(145deg,rgba(248,251,253,0.97),rgba(225,235,244,0.9))]",
+        dot: "cm-tech-breathe bg-sky-500 text-sky-500",
+        count: "border-sky-200/80 bg-sky-50/80 text-sky-700",
       };
     case "done":
       return {
-        shell: "border-emerald-100 bg-emerald-50/55",
-        dot: "bg-emerald-500",
-        count: "bg-emerald-100 text-emerald-700",
+        shell: "border-emerald-200/70 bg-[linear-gradient(145deg,rgba(249,252,251,0.97),rgba(226,239,236,0.88))]",
+        dot: "bg-emerald-500 text-emerald-500",
+        count: "border-emerald-200/80 bg-emerald-50/80 text-emerald-700",
       };
   }
 }
@@ -4228,6 +4604,8 @@ type TeamChatMessage = {
   sortPhase?: number;
 };
 
+const TEAM_CHAT_WAIT_DIGEST_MS = 3 * 60 * 1000;
+
 function buildTeamChatMessages(
   groups: CollaborationGroup[],
   memberById: Map<number, TeamMember>,
@@ -4240,6 +4618,7 @@ function buildTeamChatMessages(
     [...memberById.values()].map((member) => [member.member_key, member]),
   );
   for (const group of groups) {
+    const groupMessages: TeamChatMessage[] = [];
     const firstItemTime = group.items.reduce(
       (current, item) => Math.min(current, item.timeMs),
       Number.POSITIVE_INFINITY,
@@ -4265,7 +4644,7 @@ function buildTeamChatMessages(
         assignmentSenderKey === currentUserKey
           ? currentUserLabel
           : displayMemberName(creatorKey, memberByKey, leaderMemberId);
-      messages.push({
+      groupMessages.push({
         id: `task-${group.task.id}`,
         kind: "member",
         sender: assignmentSender,
@@ -4280,7 +4659,7 @@ function buildTeamChatMessages(
       });
       const resultSummary = taskResultText(group.task);
       if (resultSummary && group.items.length === 0) {
-        messages.push({
+        groupMessages.push({
           id: `task-result-${group.task.id}`,
           kind: "member",
           sender: targetLabel,
@@ -4295,7 +4674,7 @@ function buildTeamChatMessages(
         });
       }
       if (group.task.error_message && group.items.length === 0) {
-        messages.push({
+        groupMessages.push({
           id: `task-error-${group.task.id}`,
           kind: "member",
           sender: targetLabel,
@@ -4313,13 +4692,29 @@ function buildTeamChatMessages(
 
     const taskResult = taskResultText(group.task);
     for (const item of group.items) {
-      if (isTaskDispatchEcho(item, group.task) || isProtocolProgressEcho(item) || isProtocolNoiseItem(item)) {
+      if (
+        isTaskDispatchEcho(item, group.task) ||
+        isProtocolProgressEcho(item) ||
+        isProtocolNoiseItem(item) ||
+        isAssignmentHeartbeatItem(item)
+      ) {
         continue;
       }
       const message = chatMessageFromItem(item, memberByKey, leaderMemberId);
       if (message) {
-        messages.push(message);
+        if (group.task) {
+          const minSequence = taskSequenceBase + 0.1 + (message.sortPhase || 1) / 10;
+          message.sequence =
+            typeof message.sequence === "number" && Number.isFinite(message.sequence)
+              ? Math.max(message.sequence, minSequence)
+              : minSequence;
+        }
+        groupMessages.push(message);
       }
+    }
+    const waitDigest = heartbeatWaitDigestMessage(group, groupMessages, memberByKey, leaderMemberId);
+    if (waitDigest) {
+      groupMessages.push(waitDigest);
     }
     if (
       group.task?.status === "succeeded" &&
@@ -4330,7 +4725,7 @@ function buildTeamChatMessages(
       const target =
         memberById.get(group.task.target_member_id)?.member_key ||
         `#${group.task.target_member_id}`;
-      messages.push({
+      groupMessages.push({
         id: `task-result-full-${group.task.id}`,
         kind: "member",
         sender: displayMemberName(target, memberByKey, leaderMemberId),
@@ -4344,11 +4739,12 @@ function buildTeamChatMessages(
         sortPhase: 2,
       });
     }
+    messages.push(...groupMessages);
   }
-  return messages
+  const sortedMessages = messages
     .filter((message) => Number.isFinite(message.time))
-    .sort(compareTeamChatMessages)
-    .filter(dedupeTeamChatMessage());
+    .sort(compareTeamChatMessages);
+  return dedupeTeamChatMessages(sortedMessages);
 }
 
 function compareTeamChatMessages(a: TeamChatMessage, b: TeamChatMessage) {
@@ -4371,12 +4767,175 @@ function isTaskDispatchEcho(item: CollaborationItem, task?: TeamTask) {
   if (item.eventType !== "outbound" && item.eventType !== "task_assigned") {
     return false;
   }
+  if (payloadBool(item.payload, ["leaderDispatchOnly", "leader_dispatch_only"]) === true) {
+    return false;
+  }
+  const rawActor = payloadText(item.payload, ["from", "source"]).toLowerCase();
+  if (rawActor && rawActor !== "clawmanager" && rawActor !== "system") {
+    return false;
+  }
+  if (!rawActor && item.event.member_id) {
+    return false;
+  }
+  const stepActor = payloadText(item.collaborationStep, ["actor", "from", "sourceMemberId"]).toLowerCase();
+  const stepContent = payloadText(item.collaborationStep, ["content", "detail", "text"]);
+  if (stepContent && stepActor && stepActor !== "clawmanager" && stepActor !== "system") {
+    return false;
+  }
   return item.event.task_id === task.id || itemMessageID(item) === task.message_id;
 }
 
 function isProtocolProgressEcho(item: CollaborationItem) {
+  if (isUserVisibleProcessItem(item) || isBusinessChatItem(item)) {
+    return false;
+  }
   return ["task_received", "task_started", "progress", "task_progress"].includes(
     item.eventType,
+  );
+}
+
+function isAssignmentHeartbeatItem(item: CollaborationItem) {
+  const eventKind = payloadText(item.payload, ["eventKind", "event_kind", "kind"]).toLowerCase();
+  return eventKind === "assignment_heartbeat" || item.eventType === "assignment_heartbeat";
+}
+
+function isTerminalGroup(group: CollaborationGroup) {
+  const status = group.task?.status?.toLowerCase();
+  return status === "succeeded" || status === "failed" || status === "stale";
+}
+
+function heartbeatWaitDigestMessage(
+  group: CollaborationGroup,
+  groupMessages: TeamChatMessage[],
+  memberByKey: Map<string, TeamMember>,
+  leaderMemberId?: string,
+): TeamChatMessage | null {
+  if (isTerminalGroup(group)) {
+    return null;
+  }
+  const heartbeatItems = group.items
+    .filter(isAssignmentMonitorDigestItem)
+    .filter((item) => Number.isFinite(item.timeMs))
+    .sort((a, b) => a.timeMs - b.timeMs || a.event.id - b.event.id);
+  if (heartbeatItems.length === 0) {
+    return null;
+  }
+  const latestHeartbeat = heartbeatItems[heartbeatItems.length - 1];
+  const taskCreatedTime = group.task ? new Date(group.task.created_at).getTime() : Number.NEGATIVE_INFINITY;
+  const lastRealMessageTime = groupMessages.reduce(
+    (latest, message) => Math.max(latest, message.time),
+    Number.isFinite(taskCreatedTime) ? taskCreatedTime : Number.NEGATIVE_INFINITY,
+  );
+  if (
+    Number.isFinite(lastRealMessageTime) &&
+    latestHeartbeat.timeMs - lastRealMessageTime < TEAM_CHAT_WAIT_DIGEST_MS
+  ) {
+    return null;
+  }
+  if (groupMessages.some((message) => message.time > latestHeartbeat.timeMs)) {
+    return null;
+  }
+  const activeActors = uniqueRecentHeartbeatActors(heartbeatItems, latestHeartbeat.timeMs, memberByKey, leaderMemberId);
+  const content = activeActors.length > 0
+    ? `${activeActors.join("、")} 仍在执行，Agent 正在继续处理当前回合。系统会继续监控，有新的计划、进度或结果时会自动更新。`
+    : "任务仍在执行，Agent 正在继续处理当前回合。系统会继续监控，有新的计划、进度或结果时会自动更新。";
+  return {
+    id: `heartbeat-digest-${group.key}`,
+    kind: "system",
+    sender: "系统",
+    senderKey: "system",
+    content,
+    time: latestHeartbeat.timeMs,
+    sequence: latestHeartbeat.timeMs * 1000 + 0.6,
+    tone: "normal",
+    dedupeKey: `heartbeat-digest:${group.key}`,
+    threadKey: group.key,
+    sortPhase: 1,
+  };
+}
+
+function uniqueRecentHeartbeatActors(
+  heartbeatItems: CollaborationItem[],
+  latestHeartbeatTime: number,
+  memberByKey: Map<string, TeamMember>,
+  leaderMemberId?: string,
+) {
+  const actors: string[] = [];
+  const seen = new Set<string>();
+  for (const item of heartbeatItems) {
+    if (latestHeartbeatTime - item.timeMs > TEAM_CHAT_WAIT_DIGEST_MS) {
+      continue;
+    }
+    const key = item.actor || item.from || payloadText(item.payload, ["memberId", "member_id"]);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    actors.push(displayMemberName(key, memberByKey, leaderMemberId));
+  }
+  return actors.slice(0, 3);
+}
+
+function isUserVisibleProcessItem(item: CollaborationItem) {
+  const eventKind = payloadText(item.payload, ["eventKind", "event_kind", "kind"]).toLowerCase();
+  const visibleRaw = payloadText(item.payload, ["visibleToChat", "visible_to_chat"]).toLowerCase();
+  const explicitlyHidden = ["false", "0", "no", "off"].includes(visibleRaw);
+  const explicitlyVisible = payloadBool(item.payload, ["visibleToChat", "visible_to_chat"]) === true;
+  const chatPolicy = payloadText(item.payload, ["chatPolicy", "chat_policy"]).toLowerCase();
+  if (["visible", "replaceable", "warning"].includes(chatPolicy)) {
+    return Boolean(item.content.trim());
+  }
+  if (chatPolicy === "hidden" || chatPolicy === "digest") {
+    return false;
+  }
+  if (isAssignmentMonitorDigestItem(item)) {
+    return false;
+  }
+  if (isBusinessChatItem(item)) {
+    return true;
+  }
+  const processKinds = new Set([
+    "leader_plan",
+    "worker_plan",
+    "worker_progress",
+    "leader_synthesis",
+    "completion_candidate",
+    "completion_validation_warning",
+    "assignment_recovery_started",
+    "assignment_reissued",
+    "assignment_recovery_exhausted",
+  ]);
+  if (processKinds.has(eventKind) || processKinds.has(item.eventType)) {
+    return !explicitlyHidden;
+  }
+  if (isAssignmentHeartbeatItem(item)) {
+    return false;
+  }
+  return (explicitlyVisible || !explicitlyHidden) && hasMeaningfulChatBody(item) && !isLowValueProtocolContent(item.content);
+}
+
+function isAssignmentMonitorDigestItem(item: CollaborationItem) {
+  const eventKind = payloadText(item.payload, ["eventKind", "event_kind", "kind"]).toLowerCase();
+  const chatPolicy = payloadText(item.payload, ["chatPolicy", "chat_policy"]).toLowerCase();
+  if (["visible", "replaceable", "warning"].includes(chatPolicy)) {
+    return false;
+  }
+  return (
+    isAssignmentHeartbeatItem(item) ||
+    eventKind === "assignment_check_requested" ||
+    eventKind === "assignment_check_result" ||
+    item.eventType === "assignment_check_requested" ||
+    item.eventType === "assignment_check_result"
+  );
+}
+
+function isLowValueProtocolContent(content: string) {
+  const normalized = content.trim().toLowerCase();
+  return (
+    normalized === "task_received" ||
+    normalized === "task_started" ||
+    normalized === "redis team task started" ||
+    normalized === "redis team task processing completed"
   );
 }
 
@@ -4395,6 +4954,7 @@ function chatMessageFromItem(
   const isAssignmentEvent =
     item.eventType === "outbound" ||
     item.eventType === "task_assigned" ||
+    item.eventType === "team_send" ||
     item.eventType === "peer_request" ||
     item.eventType === "peer_handoff" ||
     item.eventType === "peer_review_request";
@@ -4402,7 +4962,14 @@ function chatMessageFromItem(
   const isFeedbackEvent =
     isWorkerToLeaderMessage(senderKey, item.to, leaderMemberId) ||
     isWorkerFeedbackEvent(item, senderKey, leaderMemberId, hasContent);
-  const isSystem = item.eventType === "task_stale" || (isAssignmentEvent && !hasContent);
+  const eventKind = payloadText(item.payload, ["eventKind", "event_kind", "kind"]).toLowerCase();
+  const isSystemProcess =
+    senderKey === "clawmanager-monitor" ||
+    eventKind === "assignment_check_requested" ||
+    item.eventType === "assignment_check_requested" ||
+    eventKind === "assignment_recovery_started" ||
+    eventKind === "assignment_reissued";
+  const isSystem = item.eventType === "task_stale" || isSystemProcess || (isAssignmentEvent && !hasContent);
   const fallbackContent =
     isAssignmentEvent && !hasContent
       ? assignmentEventFallback(item, senderLabel, targetLabel, isFeedbackEvent)
@@ -4424,8 +4991,10 @@ function chatMessageFromItem(
           : "assignment"
         : isAssignmentEvent && isFeedbackEvent
           ? "feedback"
-        : item.eventType === "task_failed" || item.eventType === "message_failed"
+        : item.eventType === "task_failed" || item.eventType === "message_failed" || eventKind === "assignment_recovery_exhausted"
           ? "error"
+          : item.eventType === "completion_deferred" || eventKind === "completion_deferred" || eventKind === "completion_rejected" || eventKind === "completion_needs_confirmation"
+            ? "error"
           : item.eventType.startsWith("peer_")
             ? "assignment"
           : senderKey === leaderMemberId || senderKey === "ClawManager"
@@ -4475,18 +5044,27 @@ function isTerminalFeedbackItem(
 const finalFeedbackContentPattern =
   /\bDONE\b|team_complete_task|任务核心结果|完整详细产出|结果已反馈|已完成|执行完成|完成任务/;
 
-function dedupeTeamChatMessage() {
+function dedupeTeamChatMessages(messages: TeamChatMessage[]) {
+  const lastReplaceable = new Map<string, number>();
+  messages.forEach((message, index) => {
+    if (message.dedupeKey?.startsWith("replaceable:")) {
+      lastReplaceable.set(message.dedupeKey, index);
+    }
+  });
   const seen = new Set<string>();
-  return (message: TeamChatMessage) => {
+  return messages.filter((message, index) => {
     if (!message.dedupeKey) {
       return true;
+    }
+    if (message.dedupeKey.startsWith("replaceable:")) {
+      return lastReplaceable.get(message.dedupeKey) === index;
     }
     if (seen.has(message.dedupeKey)) {
       return false;
     }
     seen.add(message.dedupeKey);
     return true;
-  };
+  });
 }
 
 function chatItemDedupeKey(
@@ -4496,28 +5074,64 @@ function chatItemDedupeKey(
   isAssignmentEvent: boolean,
   isFeedbackEvent: boolean,
 ) {
+  const eventKind = payloadText(item.payload, ["eventKind", "event_kind", "kind"]).toLowerCase();
   const messageId =
     payloadTextDeep(item.payload, ["messageId", "message_id", "inReplyTo", "in_reply_to"]) ||
     item.event.message_id ||
     "";
   const taskId =
-    payloadTextDeep(item.payload, ["taskId", "task_id", "runtimeTaskId"]) ||
+    payloadTextDeep(item.payload, ["rootTaskId", "root_task_id", "taskId", "task_id", "runtimeTaskId"]) ||
     (item.event.task_id ? canonicalTaskKey(item.event.task_id) : item.taskKey);
+  const assignmentId =
+    payloadTextDeep(item.payload, ["assignmentId", "assignment_id", "workId", "work_id"]);
+  const displayKey = payloadTextDeep(item.payload, ["displayKey", "display_key"]);
+  // Only root-final/completion display keys represent a singleton business
+  // fact. Older worker-plan/progress keys can be shared by different workers
+  // when assignmentId was absent, so content identity must win for them.
+  if (displayKey.startsWith("root-final:") || displayKey.startsWith("completion:")) {
+    return displayKey;
+  }
+  const contentHash =
+    payloadTextDeep(item.payload, ["contentHash", "content_hash"]) ||
+    chatContentHash(normalizeChatDedupeContent(content));
+  const resultScope =
+    payloadTextDeep(item.payload, ["completionId", "completion_id"]) ||
+    payloadTextDeep(item.payload, ["sourceCompletionId", "source_completion_id"]) ||
+    payloadTextDeep(item.payload, ["sourceEventId", "source_event_id"]) ||
+    payloadTextDeep(item.payload, ["sourceMessageId", "source_message_id"]);
   const contentKey = normalizeChatDedupeContent(content);
+  if (isAssignmentMonitorDigestItem(item) || eventKind === "assignment_check_result") {
+    return `monitor:${item.taskKey}:${senderKey}`;
+  }
   if (isAssignmentEvent) {
-    return `assignment:${messageId || taskId}:${senderKey}:${item.to || ""}:${contentKey}`;
+    return `assignment:${taskId}:${senderKey}:${item.to || ""}:${assignmentId || messageId}:${contentHash}`;
   }
   if (isFeedbackEvent) {
-    return `feedback:${messageId || taskId}:${senderKey}:${item.to || ""}:${contentKey}`;
+    // Result IDs are transport/audit identifiers. Chat de-duplication is based
+    // on the actual business content, so a corrected second result remains
+    // visible while a re-delivered identical result does not appear twice.
+    return `feedback:${taskId}:${senderKey}:${item.to || ""}:${assignmentId}:${contentHash}`;
   }
   if (item.eventType === "task_completed" || item.eventType === "completion" || item.eventType === "reply") {
-    return `feedback:${messageId || taskId}:${senderKey}:${item.to || ""}:${contentKey}`;
+    return `feedback:${taskId}:${senderKey}:${item.to || ""}:${assignmentId}:${contentHash || resultScope || chatContentHash(contentKey)}`;
+  }
+  if (isBusinessChatItem(item)) {
+    return `narrative:${taskId}:${senderKey}:${item.to || ""}:${assignmentId}:${eventKind}:${contentHash}`;
   }
   return "";
 }
 
 function normalizeChatDedupeContent(content: string) {
   return content.trim().replace(/\s+/g, " ").slice(0, 240);
+}
+
+function chatContentHash(content: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < content.length; index++) {
+    hash ^= content.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
 function assignmentEventFallback(
@@ -5222,25 +5836,6 @@ function MemberPill({ label, value }: { label: string; value: string }) {
       <span className="text-gray-400">{label}</span>
       <span className="font-medium text-gray-800">{value}</span>
     </span>
-  );
-}
-
-function MetaRow({
-  label,
-  value,
-  className = "",
-}: {
-  label: string;
-  value: string;
-  className?: string;
-}) {
-  return (
-    <div className={`rounded-xl border border-[#f1e7e1] bg-white/80 px-3 py-2 ${className}`}>
-      <dt className="text-[11px] leading-4 text-gray-500">{label}</dt>
-      <dd className="mt-0.5 truncate font-medium leading-5 text-gray-900" title={value}>
-        {value}
-      </dd>
-    </div>
   );
 }
 
