@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -9,11 +10,85 @@ import (
 	"time"
 
 	"clawreef/internal/models"
+	"clawreef/internal/repository"
 )
 
-func (s *instanceService) createV2Instance(ctx context.Context, userID int, req CreateInstanceRequest, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error) {
+var ErrRuntimeSuspendUnsupported = errors.New("runtime suspend is not supported")
+
+type RuntimeBackend interface {
+	Create(ctx context.Context, userID int, req CreateInstanceRequest, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error)
+	Start(ctx context.Context, instance *models.Instance, runtimeType string) error
+	Stop(ctx context.Context, instance *models.Instance) error
+	Delete(ctx context.Context, instance *models.Instance) error
+	Status(ctx context.Context, instance *models.Instance) (*InstanceStatus, error)
+	Endpoint(ctx context.Context, instance *models.Instance) (*RuntimeEndpoint, error)
+	AttachPolicy(ctx context.Context, instance *models.Instance, policy RuntimePolicyAttachment) error
+	Suspend(ctx context.Context, instance *models.Instance) error
+}
+
+type RuntimeEndpoint struct {
+	AgentEndpoint string
+	PodIP         string
+	Port          int
+}
+
+type RuntimePolicyAttachment struct{}
+
+type liteBackend struct {
+	instanceRepo          repository.InstanceRepository
+	runtimePodRepo        repository.RuntimePodRepository
+	bindingRepo           repository.InstanceRuntimeBindingRepository
+	agentClient           RuntimeAgentClient
+	openClawConfigService OpenClawConfigService
+	workspaceRoot         string
+}
+
+func newLiteBackend(s *instanceService) *liteBackend {
+	workspaceRoot := "/workspaces"
+	if s != nil && strings.TrimSpace(s.workspaceRoot) != "" {
+		workspaceRoot = strings.TrimSpace(s.workspaceRoot)
+	}
+	if s == nil {
+		return &liteBackend{workspaceRoot: workspaceRoot}
+	}
+	return &liteBackend{
+		instanceRepo:          s.instanceRepo,
+		runtimePodRepo:        s.runtimePodRepo,
+		bindingRepo:           s.bindingRepo,
+		agentClient:           s.agentClient,
+		openClawConfigService: s.openClawConfigService,
+		workspaceRoot:         workspaceRoot,
+	}
+}
+
+func (s *instanceService) runtimeBackendForMode(mode string) (RuntimeBackend, bool) {
+	normalizedMode, ok := NormalizeInstanceMode(mode)
+	if !ok {
+		return nil, false
+	}
+	switch normalizedMode {
+	case InstanceModeLite:
+		return newLiteBackend(s), true
+	default:
+		return nil, false
+	}
+}
+
+func (s *instanceService) runtimeBackendForInstance(instance *models.Instance) (RuntimeBackend, string, bool) {
+	runtimeType, ok := v2RuntimeTypeForInstance(instance)
+	if !ok {
+		return nil, "", false
+	}
+	backend, ok := s.runtimeBackendForMode(modeForExistingInstance(instance))
+	if !ok {
+		return nil, "", false
+	}
+	return backend, runtimeType, true
+}
+
+func (b *liteBackend) Create(ctx context.Context, userID int, req CreateInstanceRequest, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error) {
 	now := time.Now()
-	workspaceRoot := s.runtimeWorkspaceRoot()
+	workspaceRoot := b.runtimeWorkspaceRoot()
 	instance := &models.Instance{
 		UserID:                   userID,
 		Name:                     strings.TrimSpace(req.Name),
@@ -40,35 +115,35 @@ func (s *instanceService) createV2Instance(ctx context.Context, userID int, req 
 		StartedAt:                &now,
 	}
 
-	if err := s.instanceRepo.Create(instance); err != nil {
+	if err := b.instanceRepo.Create(instance); err != nil {
 		return nil, fmt.Errorf("failed to create instance record: %w", err)
 	}
 
-	if _, err := s.ensureGatewayToken(instance); err != nil {
-		_ = s.instanceRepo.Delete(instance.ID)
+	if _, err := b.ensureGatewayToken(instance); err != nil {
+		_ = b.instanceRepo.Delete(instance.ID)
 		return nil, fmt.Errorf("failed to provision lite gateway token: %w", err)
 	}
-	if _, err := s.ensureAgentBootstrapToken(instance); err != nil {
-		_ = s.instanceRepo.Delete(instance.ID)
+	if _, err := b.ensureAgentBootstrapToken(instance); err != nil {
+		_ = b.instanceRepo.Delete(instance.ID)
 		return nil, fmt.Errorf("failed to provision lite agent bootstrap token: %w", err)
 	}
 
-	if supportsRuntimeConfigInjection(instance.Type) && s.openClawConfigService != nil && req.OpenClawConfigPlan != nil && hasOpenClawConfigSelections(*req.OpenClawConfigPlan) {
-		bootstrapSnapshot, err := s.openClawConfigService.CreateSnapshotForInstance(userID, instance, req.OpenClawConfigPlan)
+	if supportsRuntimeConfigInjection(instance.Type) && b.openClawConfigService != nil && req.OpenClawConfigPlan != nil && hasOpenClawConfigSelections(*req.OpenClawConfigPlan) {
+		bootstrapSnapshot, err := b.openClawConfigService.CreateSnapshotForInstance(userID, instance, req.OpenClawConfigPlan)
 		if err != nil {
-			_ = s.instanceRepo.Delete(instance.ID)
+			_ = b.instanceRepo.Delete(instance.ID)
 			return nil, fmt.Errorf("failed to compile lite runtime bootstrap config: %w", err)
 		}
 		if bootstrapSnapshot != nil {
 			instance.OpenClawConfigSnapshotID = &bootstrapSnapshot.ID
 			instance.UpdatedAt = time.Now()
-			if err := s.instanceRepo.Update(instance); err != nil {
-				_ = s.openClawConfigService.MarkSnapshotFailed(bootstrapSnapshot, err)
-				_ = s.instanceRepo.Delete(instance.ID)
+			if err := b.instanceRepo.Update(instance); err != nil {
+				_ = b.openClawConfigService.MarkSnapshotFailed(bootstrapSnapshot, err)
+				_ = b.instanceRepo.Delete(instance.ID)
 				return nil, fmt.Errorf("failed to persist lite runtime snapshot reference: %w", err)
 			}
-			if err := s.openClawConfigService.MarkSnapshotActive(bootstrapSnapshot); err != nil {
-				_ = s.instanceRepo.Delete(instance.ID)
+			if err := b.openClawConfigService.MarkSnapshotActive(bootstrapSnapshot); err != nil {
+				_ = b.instanceRepo.Delete(instance.ID)
 				return nil, fmt.Errorf("failed to activate lite runtime bootstrap snapshot: %w", err)
 			}
 		}
@@ -76,11 +151,11 @@ func (s *instanceService) createV2Instance(ctx context.Context, userID int, req 
 
 	workspacePath, err := ensureRuntimeWorkspaceDirectories(workspaceRoot, runtimeType, userID, instance.ID)
 	if err != nil {
-		_ = s.instanceRepo.Delete(instance.ID)
+		_ = b.instanceRepo.Delete(instance.ID)
 		return nil, fmt.Errorf("failed to create instance workspace: %w", err)
 	}
-	if err := s.instanceRepo.SetWorkspacePath(ctx, instance.ID, workspacePath); err != nil {
-		_ = s.instanceRepo.Delete(instance.ID)
+	if err := b.instanceRepo.SetWorkspacePath(ctx, instance.ID, workspacePath); err != nil {
+		_ = b.instanceRepo.Delete(instance.ID)
 		return nil, fmt.Errorf("failed to persist instance workspace path: %w", err)
 	}
 	instance.WorkspacePath = &workspacePath
@@ -89,15 +164,15 @@ func (s *instanceService) createV2Instance(ctx context.Context, userID int, req 
 	return instance, nil
 }
 
-func (s *instanceService) startV2Instance(ctx context.Context, instance *models.Instance, runtimeType string) error {
-	if err := s.ensureV2Workspace(ctx, instance, runtimeType); err != nil {
+func (b *liteBackend) Start(ctx context.Context, instance *models.Instance, runtimeType string) error {
+	if err := b.ensureWorkspace(ctx, instance, runtimeType); err != nil {
 		return err
 	}
 	nextGeneration := instance.RuntimeGeneration + 1
 	if nextGeneration <= 0 {
 		nextGeneration = 1
 	}
-	if err := s.instanceRepo.UpdateRuntimeState(ctx, instance.ID, "creating", nextGeneration, nil); err != nil {
+	if err := b.instanceRepo.UpdateRuntimeState(ctx, instance.ID, "creating", nextGeneration, nil); err != nil {
 		return fmt.Errorf("failed to mark v2 instance creating: %w", err)
 	}
 	instance.Status = "creating"
@@ -110,8 +185,8 @@ func (s *instanceService) startV2Instance(ctx context.Context, instance *models.
 	return nil
 }
 
-func (s *instanceService) stopV2Instance(ctx context.Context, instance *models.Instance) error {
-	if err := s.instanceRepo.UpdateRuntimeState(ctx, instance.ID, "stopped", instance.RuntimeGeneration, nil); err != nil {
+func (b *liteBackend) Stop(ctx context.Context, instance *models.Instance) error {
+	if err := b.instanceRepo.UpdateRuntimeState(ctx, instance.ID, "stopped", instance.RuntimeGeneration, nil); err != nil {
 		return fmt.Errorf("failed to mark v2 instance stopped: %w", err)
 	}
 	now := time.Now()
@@ -122,35 +197,73 @@ func (s *instanceService) stopV2Instance(ctx context.Context, instance *models.I
 	instance.PodIP = nil
 	instance.UpdatedAt = now
 	GetHub().BroadcastInstanceStatus(instance.UserID, instance)
-	return s.cleanupV2GatewayBinding(ctx, instance)
+	return b.cleanupGatewayBinding(ctx, instance)
 }
 
-func (s *instanceService) deleteV2Instance(ctx context.Context, instance *models.Instance) error {
+func (b *liteBackend) Delete(ctx context.Context, instance *models.Instance) error {
 	if instance.Status != "deleting" {
 		now := time.Now()
 		instance.Status = "deleting"
 		instance.UpdatedAt = now
-		if err := s.instanceRepo.Update(instance); err != nil {
+		if err := b.instanceRepo.Update(instance); err != nil {
 			return fmt.Errorf("failed to mark v2 instance as deleting: %w", err)
 		}
 		GetHub().BroadcastInstanceStatus(instance.UserID, instance)
 	}
 
-	cleanupErr := s.cleanupV2GatewayBinding(ctx, instance)
+	cleanupErr := b.cleanupGatewayBinding(ctx, instance)
 	if cleanupErr != nil {
 		return cleanupErr
 	}
-	if err := s.instanceRepo.Delete(instance.ID); err != nil {
+	if err := b.instanceRepo.Delete(instance.ID); err != nil {
 		return fmt.Errorf("failed to delete v2 instance record: %w", err)
 	}
 	return nil
 }
 
-func (s *instanceService) cleanupV2GatewayBinding(ctx context.Context, instance *models.Instance) error {
-	if s.bindingRepo == nil {
+func (b *liteBackend) Status(ctx context.Context, instance *models.Instance) (*InstanceStatus, error) {
+	runtimeType, _ := NormalizeV2RuntimeType(instance.Type)
+	return &InstanceStatus{
+		InstanceID:          instance.ID,
+		Status:              instance.Status,
+		Availability:        b.availability(ctx, instance),
+		AgentType:           runtimeType,
+		WorkspaceUsageBytes: instance.WorkspaceUsageBytes,
+		CreatedAt:           instance.CreatedAt,
+		StartedAt:           instance.StartedAt,
+	}, nil
+}
+
+func (b *liteBackend) Endpoint(ctx context.Context, instance *models.Instance) (*RuntimeEndpoint, error) {
+	binding, pod, err := b.runningBindingAndPod(ctx, instance)
+	if err != nil || binding == nil || pod == nil {
+		return nil, err
+	}
+	endpoint := &RuntimeEndpoint{
+		Port: binding.GatewayPort,
+	}
+	if pod.AgentEndpoint != nil {
+		endpoint.AgentEndpoint = strings.TrimSpace(*pod.AgentEndpoint)
+	}
+	if pod.PodIP != nil {
+		endpoint.PodIP = strings.TrimSpace(*pod.PodIP)
+	}
+	return endpoint, nil
+}
+
+func (b *liteBackend) AttachPolicy(ctx context.Context, instance *models.Instance, policy RuntimePolicyAttachment) error {
+	return nil
+}
+
+func (b *liteBackend) Suspend(ctx context.Context, instance *models.Instance) error {
+	return ErrRuntimeSuspendUnsupported
+}
+
+func (b *liteBackend) cleanupGatewayBinding(ctx context.Context, instance *models.Instance) error {
+	if b.bindingRepo == nil {
 		return nil
 	}
-	binding, err := s.bindingRepo.GetByInstanceID(ctx, instance.ID)
+	binding, err := b.bindingRepo.GetByInstanceID(ctx, instance.ID)
 	if err != nil {
 		return fmt.Errorf("failed to get v2 runtime binding: %w", err)
 	}
@@ -158,34 +271,34 @@ func (s *instanceService) cleanupV2GatewayBinding(ctx context.Context, instance 
 		return nil
 	}
 
-	if s.runtimePodRepo != nil {
-		pod, podErr := s.runtimePodRepo.GetByID(ctx, binding.RuntimePodID)
+	if b.runtimePodRepo != nil {
+		pod, podErr := b.runtimePodRepo.GetByID(ctx, binding.RuntimePodID)
 		if podErr != nil {
 			return fmt.Errorf("failed to get runtime pod %d for v2 cleanup: %w", binding.RuntimePodID, podErr)
 		} else if pod == nil {
 			return fmt.Errorf("runtime pod %d is not available for v2 cleanup", binding.RuntimePodID)
-		} else if pod != nil && pod.AgentEndpoint != nil && strings.TrimSpace(*pod.AgentEndpoint) != "" && s.agentClient != nil && binding.GatewayID != "" {
-			if err := s.agentClient.DeleteGateway(ctx, strings.TrimSpace(*pod.AgentEndpoint), binding.GatewayID); err != nil {
+		} else if pod != nil && pod.AgentEndpoint != nil && strings.TrimSpace(*pod.AgentEndpoint) != "" && b.agentClient != nil && binding.GatewayID != "" {
+			if err := b.agentClient.DeleteGateway(ctx, strings.TrimSpace(*pod.AgentEndpoint), binding.GatewayID); err != nil {
 				return fmt.Errorf("failed to delete v2 gateway: %w", err)
 			}
 		}
 	}
 
-	if err := s.bindingRepo.DeleteByInstanceIDAndReleaseSlot(ctx, instance.ID, binding.RuntimePodID); err != nil {
+	if err := b.bindingRepo.DeleteByInstanceIDAndReleaseSlot(ctx, instance.ID, binding.RuntimePodID); err != nil {
 		return fmt.Errorf("failed to delete v2 runtime binding and release slot: %w", err)
 	}
 	return nil
 }
 
-func (s *instanceService) ensureV2Workspace(ctx context.Context, instance *models.Instance, runtimeType string) error {
+func (b *liteBackend) ensureWorkspace(ctx context.Context, instance *models.Instance, runtimeType string) error {
 	if instance.WorkspacePath != nil && strings.TrimSpace(*instance.WorkspacePath) != "" {
 		return nil
 	}
-	workspacePath, err := ensureRuntimeWorkspaceDirectories(s.runtimeWorkspaceRoot(), runtimeType, instance.UserID, instance.ID)
+	workspacePath, err := ensureRuntimeWorkspaceDirectories(b.runtimeWorkspaceRoot(), runtimeType, instance.UserID, instance.ID)
 	if err != nil {
 		return fmt.Errorf("failed to create instance workspace: %w", err)
 	}
-	if err := s.instanceRepo.SetWorkspacePath(ctx, instance.ID, workspacePath); err != nil {
+	if err := b.instanceRepo.SetWorkspacePath(ctx, instance.ID, workspacePath); err != nil {
 		return fmt.Errorf("failed to persist instance workspace path: %w", err)
 	}
 	instance.WorkspacePath = &workspacePath
@@ -241,21 +354,44 @@ func availabilityForStatus(status string) string {
 	}
 }
 
-func (s *instanceService) v2InstanceAvailability(ctx context.Context, instance *models.Instance) string {
+func (b *liteBackend) availability(ctx context.Context, instance *models.Instance) string {
 	base := availabilityForStatus(instance.Status)
 	if base != "available" {
 		return base
 	}
-	if s == nil || s.bindingRepo == nil || s.runtimePodRepo == nil {
-		return "unavailable"
-	}
-	binding, err := s.bindingRepo.GetRunningByInstanceID(ctx, instance.ID)
-	if err != nil || binding == nil || binding.GatewayPort <= 0 {
-		return "unavailable"
-	}
-	pod, err := s.runtimePodRepo.GetByID(ctx, binding.RuntimePodID)
-	if err != nil || pod == nil || pod.PodIP == nil || strings.TrimSpace(*pod.PodIP) == "" {
+	binding, pod, err := b.runningBindingAndPod(ctx, instance)
+	if err != nil || binding == nil || pod == nil {
 		return "unavailable"
 	}
 	return "available"
+}
+
+func (b *liteBackend) runningBindingAndPod(ctx context.Context, instance *models.Instance) (*models.InstanceRuntimeBinding, *models.RuntimePod, error) {
+	if b == nil || b.bindingRepo == nil || b.runtimePodRepo == nil {
+		return nil, nil, fmt.Errorf("lite runtime backend is not configured")
+	}
+	binding, err := b.bindingRepo.GetRunningByInstanceID(ctx, instance.ID)
+	if err != nil || binding == nil || binding.GatewayPort <= 0 {
+		return nil, nil, err
+	}
+	pod, err := b.runtimePodRepo.GetByID(ctx, binding.RuntimePodID)
+	if err != nil || pod == nil || pod.PodIP == nil || strings.TrimSpace(*pod.PodIP) == "" {
+		return nil, nil, err
+	}
+	return binding, pod, nil
+}
+
+func (b *liteBackend) runtimeWorkspaceRoot() string {
+	if b != nil && strings.TrimSpace(b.workspaceRoot) != "" {
+		return strings.TrimSpace(b.workspaceRoot)
+	}
+	return "/workspaces"
+}
+
+func (b *liteBackend) ensureGatewayToken(instance *models.Instance) (string, error) {
+	return ensureGatewayTokenWithRepo(b.instanceRepo, instance)
+}
+
+func (b *liteBackend) ensureAgentBootstrapToken(instance *models.Instance) (string, error) {
+	return ensureAgentBootstrapTokenWithRepo(b.instanceRepo, instance)
 }

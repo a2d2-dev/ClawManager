@@ -367,7 +367,11 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 		return nil, err
 	}
 	if runtimeType, isV2 := NormalizeV2RuntimeType(req.Type); isV2 && instanceMode == InstanceModeLite {
-		return s.createV2Instance(ctx, userID, req, runtimeType, environmentOverridesJSON)
+		backend, ok := s.runtimeBackendForMode(instanceMode)
+		if !ok {
+			return nil, fmt.Errorf("runtime backend %q is not configured", instanceMode)
+		}
+		return backend.Create(ctx, userID, req, runtimeType, environmentOverridesJSON)
 	}
 
 	runtimeConfig := buildRuntimeConfig(req.Type, req.OSType, req.OSVersion, req.ImageRegistry, req.ImageTag)
@@ -771,8 +775,8 @@ func (s *instanceService) Start(instanceID int) error {
 		return err
 	}
 
-	if runtimeType, ok := v2RuntimeTypeForInstance(instance); ok {
-		return s.startV2Instance(ctx, instance, runtimeType)
+	if backend, runtimeType, ok := s.runtimeBackendForInstance(instance); ok {
+		return backend.Start(ctx, instance, runtimeType)
 	}
 
 	if _, err := s.ensureGatewayToken(instance); err != nil {
@@ -908,6 +912,10 @@ func (s *instanceService) securityModeForInstance(instanceType string) k8s.PodSe
 }
 
 func (s *instanceService) ensureGatewayToken(instance *models.Instance) (string, error) {
+	return ensureGatewayTokenWithRepo(s.instanceRepo, instance)
+}
+
+func ensureGatewayTokenWithRepo(instanceRepo repository.InstanceRepository, instance *models.Instance) (string, error) {
 	if instance.AccessToken != nil && strings.TrimSpace(*instance.AccessToken) != "" {
 		return strings.TrimSpace(*instance.AccessToken), nil
 	}
@@ -920,7 +928,7 @@ func (s *instanceService) ensureGatewayToken(instance *models.Instance) (string,
 	token := "igt_" + hex.EncodeToString(tokenBytes)
 	instance.AccessToken = &token
 	instance.UpdatedAt = time.Now()
-	if err := s.instanceRepo.Update(instance); err != nil {
+	if err := instanceRepo.Update(instance); err != nil {
 		return "", fmt.Errorf("failed to persist instance gateway token: %w", err)
 	}
 
@@ -1015,6 +1023,10 @@ func (s *instanceService) runtimeBootstrapEnv(instance *models.Instance) (map[st
 	return provider.RuntimeEnvForSnapshot(instance.UserID, instance.Type, *instance.OpenClawConfigSnapshotID)
 }
 func (s *instanceService) ensureAgentBootstrapToken(instance *models.Instance) (string, error) {
+	return ensureAgentBootstrapTokenWithRepo(s.instanceRepo, instance)
+}
+
+func ensureAgentBootstrapTokenWithRepo(instanceRepo repository.InstanceRepository, instance *models.Instance) (string, error) {
 	if instance.AgentBootstrapToken != nil && strings.TrimSpace(*instance.AgentBootstrapToken) != "" {
 		return strings.TrimSpace(*instance.AgentBootstrapToken), nil
 	}
@@ -1025,7 +1037,7 @@ func (s *instanceService) ensureAgentBootstrapToken(instance *models.Instance) (
 	}
 	instance.AgentBootstrapToken = &token
 	instance.UpdatedAt = time.Now()
-	if err := s.instanceRepo.Update(instance); err != nil {
+	if err := instanceRepo.Update(instance); err != nil {
 		return "", fmt.Errorf("failed to persist instance agent bootstrap token: %w", err)
 	}
 	return token, nil
@@ -1205,8 +1217,8 @@ func (s *instanceService) Stop(instanceID int) error {
 		return fmt.Errorf("instance not found")
 	}
 
-	if _, ok := v2RuntimeTypeForInstance(instance); ok {
-		return s.stopV2Instance(ctx, instance)
+	if backend, _, ok := s.runtimeBackendForInstance(instance); ok {
+		return backend.Stop(ctx, instance)
 	}
 
 	if instance.Status != "running" {
@@ -1294,8 +1306,8 @@ func (s *instanceService) Delete(instanceID int) error {
 		return fmt.Errorf("instance not found")
 	}
 
-	if _, ok := v2RuntimeTypeForInstance(instance); ok {
-		return s.deleteV2Instance(context.Background(), instance)
+	if backend, _, ok := s.runtimeBackendForInstance(instance); ok {
+		return backend.Delete(context.Background(), instance)
 	}
 
 	if instance.Status != "deleting" {
@@ -1585,16 +1597,8 @@ func (s *instanceService) GetInstanceStatus(instanceID int) (*InstanceStatus, er
 		return nil, fmt.Errorf("instance not found")
 	}
 
-	if runtimeType, ok := v2RuntimeTypeForInstance(instance); ok {
-		return &InstanceStatus{
-			InstanceID:          instance.ID,
-			Status:              instance.Status,
-			Availability:        s.v2InstanceAvailability(ctx, instance),
-			AgentType:           runtimeType,
-			WorkspaceUsageBytes: instance.WorkspaceUsageBytes,
-			CreatedAt:           instance.CreatedAt,
-			StartedAt:           instance.StartedAt,
-		}, nil
+	if backend, _, ok := s.runtimeBackendForInstance(instance); ok {
+		return backend.Status(ctx, instance)
 	}
 
 	status := &InstanceStatus{
