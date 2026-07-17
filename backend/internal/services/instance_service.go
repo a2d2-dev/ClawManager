@@ -365,15 +365,19 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	if err := s.enforceInstanceModeLimits(ctx, instanceMode, req.CPUCores, req.MemoryGB, req.DiskGB, requestedGPU); err != nil {
 		return nil, err
 	}
-	if runtimeType, isV2 := NormalizeV2RuntimeType(req.Type); isV2 && instanceMode == InstanceModeLite {
-		backend, ok := s.runtimeBackendForMode(instanceMode)
-		if !ok {
-			return nil, fmt.Errorf("runtime backend %q is not configured", instanceMode)
-		}
-		return backend.Create(ctx, userID, req, runtimeType, environmentOverridesJSON)
+	backend, ok := s.runtimeBackendForMode(instanceMode)
+	if !ok {
+		return nil, fmt.Errorf("runtime backend %q is not configured", instanceMode)
 	}
-
-	return newProBackend(s).Create(ctx, userID, req, modeRuntimeType, environmentOverridesJSON)
+	backendRuntimeType := modeRuntimeType
+	if instanceMode == InstanceModeLite {
+		runtimeType, isV2 := NormalizeV2RuntimeType(req.Type)
+		if !isV2 {
+			return nil, fmt.Errorf("runtime backend %q does not support instance type %q", instanceMode, req.Type)
+		}
+		backendRuntimeType = runtimeType
+	}
+	return backend.Create(ctx, userID, req, backendRuntimeType, environmentOverridesJSON)
 }
 
 // GetByID gets an instance by ID
@@ -458,7 +462,7 @@ func (s *instanceService) Start(instanceID int) error {
 		return backend.Start(ctx, instance, runtimeType)
 	}
 
-	return newProBackend(s).Start(ctx, instance, normalizeInstanceRuntimeType(instance.RuntimeType))
+	return fmt.Errorf("runtime backend %q is not configured for instance", modeForExistingInstance(instance))
 }
 
 func (s *instanceService) securityModeForInstance(instanceType string) k8s.PodSecurityMode {
@@ -781,7 +785,7 @@ func (s *instanceService) Stop(instanceID int) error {
 		return backend.Stop(ctx, instance)
 	}
 
-	return newProBackend(s).Stop(ctx, instance)
+	return fmt.Errorf("runtime backend %q is not configured for instance", modeForExistingInstance(instance))
 }
 
 // Restart restarts an instance
@@ -833,7 +837,7 @@ func (s *instanceService) Delete(instanceID int) error {
 		return backend.Delete(context.Background(), instance)
 	}
 
-	return newProBackend(s).Delete(context.Background(), instance)
+	return fmt.Errorf("runtime backend %q is not configured for instance", modeForExistingInstance(instance))
 }
 
 // cleanupOrphanedResources cleans up any orphaned K8s resources for an instance
@@ -967,7 +971,7 @@ func (s *instanceService) GetInstanceStatus(instanceID int) (*InstanceStatus, er
 		return backend.Status(ctx, instance)
 	}
 
-	return newProBackend(s).Status(ctx, instance)
+	return nil, fmt.Errorf("runtime backend %q is not configured for instance", modeForExistingInstance(instance))
 }
 
 // ForceSyncInstance forces a status sync for a single instance
