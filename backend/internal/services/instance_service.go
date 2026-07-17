@@ -939,7 +939,9 @@ func (s *instanceService) Delete(instanceID int) error {
 			s.emitInstanceRefused(AuditEventInstanceDeleteRefused, instance, refusalCodeForError(err), nil)
 			return err
 		}
-		s.emitInstanceLifecycle(AuditEventInstanceDelete, instance, AuditOutcomeSuccess, "")
+		if _, async := backend.(*proBackend); !async {
+			s.emitInstanceLifecycle(AuditEventInstanceDelete, instance, AuditOutcomeSuccess, "")
+		}
 		return nil
 	}
 

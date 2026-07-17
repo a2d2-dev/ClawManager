@@ -848,6 +848,8 @@ type v2LifecycleInstanceRepo struct {
 	workspacePath map[int]string
 	runtimeStates map[int]v2RuntimeStateRecord
 	nextID        int
+	deleteErr     error
+	beforeDelete  func(int)
 }
 
 type v2RuntimeStateRecord struct {
@@ -982,6 +984,12 @@ func (r *v2LifecycleInstanceRepo) Update(instance *models.Instance) error {
 }
 
 func (r *v2LifecycleInstanceRepo) Delete(id int) error {
+	if r.beforeDelete != nil {
+		r.beforeDelete(id)
+	}
+	if r.deleteErr != nil {
+		return r.deleteErr
+	}
 	delete(r.byID, id)
 	r.deleted = append(r.deleted, id)
 	return nil

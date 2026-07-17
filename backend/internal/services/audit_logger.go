@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,7 @@ const (
 
 	AuditOutcomeSuccess = "success"
 	AuditOutcomeRefused = "refused"
+	AuditOutcomeFailed  = "failed"
 )
 
 const auditLogEnabledEnv = "CLAWMANAGER_AUDIT_LOG_ENABLED"
@@ -52,6 +54,7 @@ type jsonlAuditLogger struct {
 	enabled bool
 	sink    io.Writer
 	now     func() time.Time
+	mu      sync.Mutex
 }
 
 type noopAuditLogger struct{}
@@ -127,6 +130,8 @@ func (l *jsonlAuditLogger) Emit(event AuditLogEvent) error {
 		return err
 	}
 	data = append(data, '\n')
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	_, err = l.sink.Write(data)
 	return err
 }

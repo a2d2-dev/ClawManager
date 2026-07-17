@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -67,6 +68,58 @@ func TestJSONLAuditLoggerEmitsEventSequenceThroughSink(t *testing.T) {
 	}
 	if second["event"] != AuditEventAgentCommandCompleted {
 		t.Fatalf("second event = %v, want %s", second["event"], AuditEventAgentCommandCompleted)
+	}
+}
+
+func TestJSONLAuditLoggerConcurrentEmitWritesWholeJSONLines(t *testing.T) {
+	var sink bytes.Buffer
+	logger := NewJSONLAuditLogger(&sink, true)
+	const goroutineCount = 32
+	const emitsPerGoroutine = 40
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+
+	for workerID := 0; workerID < goroutineCount; workerID++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			<-start
+			for sequence := 0; sequence < emitsPerGoroutine; sequence++ {
+				if err := logger.Emit(AuditLogEvent{
+					Event:        AuditEventAgentCommandCompleted,
+					InstanceMode: InstanceModeLite,
+					InstanceID:   auditIntPtr(workerID),
+					UserID:       auditIntPtr(45),
+					Outcome:      AuditOutcomeSuccess,
+					Context: map[string]interface{}{
+						"worker_id": workerID,
+						"sequence":  sequence,
+						"payload":   strings.Repeat("x", 128),
+					},
+				}); err != nil {
+					t.Errorf("Emit returned error: %v", err)
+					return
+				}
+			}
+		}(workerID)
+	}
+
+	close(start)
+	wg.Wait()
+
+	lines := strings.Split(strings.TrimSpace(sink.String()), "\n")
+	expectedLines := goroutineCount * emitsPerGoroutine
+	if len(lines) != expectedLines {
+		t.Fatalf("audit line count = %d, want %d", len(lines), expectedLines)
+	}
+	for index, line := range lines {
+		var got map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &got); err != nil {
+			t.Fatalf("audit line %d is not independently valid JSON: %v; line=%q", index, err, line)
+		}
+		if got["event"] != AuditEventAgentCommandCompleted {
+			t.Fatalf("audit line %d event = %v, want %s", index, got["event"], AuditEventAgentCommandCompleted)
+		}
 	}
 }
 

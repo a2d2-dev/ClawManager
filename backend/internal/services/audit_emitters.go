@@ -40,6 +40,27 @@ func (s *instanceService) emitInstanceLifecycle(event string, instance *models.I
 	})
 }
 
+func (s *instanceService) emitInstanceLifecycleFailure(event string, instance *models.Instance, err error) {
+	if s == nil || instance == nil {
+		return
+	}
+	context := auditInstanceContext(instance)
+	if code := refusalCodeForError(err); code != "" {
+		context["error_code"] = code
+	}
+	if text := shortAuditError(err); text != "" {
+		context["error"] = text
+	}
+	emitAudit(s.auditLogger, AuditLogEvent{
+		Event:        event,
+		InstanceMode: modeForExistingInstance(instance),
+		InstanceID:   auditIntPtr(instance.ID),
+		UserID:       auditIntPtr(instance.UserID),
+		Outcome:      AuditOutcomeFailed,
+		Context:      context,
+	})
+}
+
 func (s *instanceService) emitInstanceRefused(event string, instance *models.Instance, refusalCode string, context map[string]interface{}) {
 	if s == nil {
 		return
@@ -169,4 +190,17 @@ func refusalCodeForError(err error) string {
 	default:
 		return "backend_error"
 	}
+}
+
+func shortAuditError(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.TrimSpace(err.Error())
+	const maxLength = 200
+	runes := []rune(text)
+	if len(runes) <= maxLength {
+		return text
+	}
+	return string(runes[:maxLength])
 }
