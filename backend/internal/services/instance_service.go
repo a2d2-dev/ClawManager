@@ -54,6 +54,15 @@ func (s *instanceService) ValidateCreateRequests(userID int, requests []CreateIn
 		if _, ok := normalizeDesktopStreamProfile(requests[idx].DesktopStreamProfile); !ok {
 			return fmt.Errorf("invalid desktop stream profile")
 		}
+		instanceMode, err := resolveCreateInstanceMode(requests[idx])
+		if err != nil {
+			return err
+		}
+		if instanceMode == InstanceModeIsolated {
+			if err := rejectIsolatedReservedProxyOverrides(environmentOverrides); err != nil {
+				return err
+			}
+		}
 	}
 
 	quota, err := s.quotaRepo.GetByUserID(userID)
@@ -165,6 +174,7 @@ type CreateInstanceRequest struct {
 	ImageTag             *string             `json:"image_tag,omitempty"`
 	EnvironmentOverrides map[string]string   `json:"environment_overrides,omitempty"`
 	StorageClass         string              `json:"storage_class"`
+	Placement            *RuntimePlacement   `json:"placement,omitempty"`
 	OpenClawConfigPlan   *OpenClawConfigPlan `json:"openclaw_config_plan,omitempty"`
 	Team                 *TeamInstanceConfig `json:"-"`
 }
@@ -192,9 +202,10 @@ type instanceModeLimitConfig struct {
 
 // UpdateInstanceRequest holds data for updating an instance
 type UpdateInstanceRequest struct {
-	Name                 *string `json:"name,omitempty" validate:"omitempty,min=3,max=50"`
-	Description          *string `json:"description,omitempty"`
-	DesktopStreamProfile *string `json:"desktop_stream_profile,omitempty" validate:"omitempty,oneof=low standard high"`
+	Name                 *string            `json:"name,omitempty" validate:"omitempty,min=3,max=50"`
+	Description          *string            `json:"description,omitempty"`
+	DesktopStreamProfile *string            `json:"desktop_stream_profile,omitempty" validate:"omitempty,oneof=low standard high"`
+	EnvironmentOverrides *map[string]string `json:"environment_overrides,omitempty"`
 }
 
 // InstanceStatus holds the status of an instance
@@ -338,6 +349,12 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	if err := s.ensureInstanceModeAvailable(instanceMode); err != nil {
 		s.emitCreateRefused(userID, instanceMode, req, refusalCodeForError(err))
 		return nil, err
+	}
+	if instanceMode == InstanceModeIsolated {
+		if err := rejectIsolatedReservedProxyOverrides(environmentOverrides); err != nil {
+			s.emitCreateRefused(userID, instanceMode, req, refusalCodeForError(err))
+			return nil, err
+		}
 	}
 
 	// Check instance count limit
@@ -1042,16 +1059,40 @@ func (s *instanceService) Update(instanceID int, req UpdateInstanceRequest) erro
 	if req.Description != nil {
 		instance.Description = req.Description
 	}
+	environmentChanged := false
+	var environmentOverrides map[string]string
+	if req.EnvironmentOverrides != nil {
+		normalized, err := normalizeEnvironmentOverrides(*req.EnvironmentOverrides)
+		if err != nil {
+			return err
+		}
+		environmentOverrides = normalized
+		environmentChanged = true
+	} else if req.DesktopStreamProfile != nil {
+		current, err := parseEnvironmentOverridesJSON(instance.EnvironmentOverridesJSON)
+		if err != nil {
+			return err
+		}
+		environmentOverrides = current
+	}
 	if req.DesktopStreamProfile != nil {
 		profile, ok := normalizeDesktopStreamProfile(*req.DesktopStreamProfile)
 		if !ok || profile == "" {
 			return fmt.Errorf("invalid desktop stream profile")
 		}
-		environmentOverrides, err := parseEnvironmentOverridesJSON(instance.EnvironmentOverridesJSON)
+		environmentOverrides = applyDesktopStreamProfileEnv(environmentOverrides, profile)
+		environmentChanged = true
+	}
+	if environmentChanged {
+		instanceMode, err := modeForExistingInstance(instance)
 		if err != nil {
 			return err
 		}
-		environmentOverrides = applyDesktopStreamProfileEnv(environmentOverrides, profile)
+		if instanceMode == InstanceModeIsolated {
+			if err := rejectIsolatedReservedProxyOverrides(environmentOverrides); err != nil {
+				return err
+			}
+		}
 		environmentOverridesJSON, err := marshalEnvironmentOverrides(environmentOverrides)
 		if err != nil {
 			return err

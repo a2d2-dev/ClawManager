@@ -204,6 +204,7 @@ type CreateInstanceRequest struct {
 	ImageTag             *string                      `json:"image_tag,omitempty"`
 	EnvironmentOverrides map[string]string            `json:"environment_overrides,omitempty"`
 	StorageClass         string                       `json:"storage_class"`
+	Placement            *services.RuntimePlacement   `json:"placement,omitempty"`
 	OpenClawConfigPlan   *services.OpenClawConfigPlan `json:"openclaw_config_plan,omitempty"`
 	SkillIDs             []int                        `json:"skill_ids,omitempty"`
 }
@@ -265,9 +266,10 @@ type BatchDeleteLiteInstancesResponse struct {
 
 // UpdateInstanceRequest represents an update instance request
 type UpdateInstanceRequest struct {
-	Name                 *string `json:"name,omitempty" binding:"omitempty,min=3,max=50"`
-	Description          *string `json:"description,omitempty"`
-	DesktopStreamProfile *string `json:"desktop_stream_profile,omitempty" binding:"omitempty,oneof=low standard high"`
+	Name                 *string            `json:"name,omitempty" binding:"omitempty,min=3,max=50"`
+	Description          *string            `json:"description,omitempty"`
+	DesktopStreamProfile *string            `json:"desktop_stream_profile,omitempty" binding:"omitempty,oneof=low standard high"`
+	EnvironmentOverrides *map[string]string `json:"environment_overrides,omitempty"`
 }
 
 // ListInstancesRequest represents a list instances request
@@ -395,6 +397,7 @@ func instanceCreateRequestToService(req CreateInstanceRequest) services.CreateIn
 		ImageTag:             req.ImageTag,
 		EnvironmentOverrides: req.EnvironmentOverrides,
 		StorageClass:         req.StorageClass,
+		Placement:            req.Placement,
 		OpenClawConfigPlan:   req.OpenClawConfigPlan,
 	}
 }
@@ -742,6 +745,7 @@ func (h *InstanceHandler) UpdateInstance(c *gin.Context) {
 		Name:                 req.Name,
 		Description:          req.Description,
 		DesktopStreamProfile: req.DesktopStreamProfile,
+		EnvironmentOverrides: req.EnvironmentOverrides,
 	}
 
 	if err := h.instanceService.Update(id, updateReq); err != nil {
