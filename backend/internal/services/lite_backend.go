@@ -69,25 +69,25 @@ func (s *instanceService) runtimeBackendForMode(mode string) (RuntimeBackend, bo
 	switch normalizedMode {
 	case InstanceModeLite:
 		return newLiteBackend(s), true
+	case InstanceModePro:
+		return newProBackend(s), true
 	default:
 		return nil, false
 	}
 }
 
-// runtimeBackendForInstance dispatches to the lite backend when
-// v2RuntimeTypeForInstance matches the pre-migration lite/V2 predicate:
-// gateway runtime_type OR persisted lite mode. Mode-keyed dispatch across
-// multiple backends will be introduced later with issues #6/#7.
+// runtimeBackendForInstance intentionally preserves the legacy V2 predicate as
+// a binary dispatch: V2 gateway/lite instances use Lite, and every other
+// persisted state falls back to the legacy Pro path. Making instance_mode
+// authoritative and introducing a third mode is deferred to issue #7.
 func (s *instanceService) runtimeBackendForInstance(instance *models.Instance) (RuntimeBackend, string, bool) {
-	runtimeType, ok := v2RuntimeTypeForInstance(instance)
-	if !ok {
+	if instance == nil {
 		return nil, "", false
 	}
-	backend, ok := s.runtimeBackendForMode(InstanceModeLite)
-	if !ok {
-		return nil, "", false
+	if runtimeType, ok := v2RuntimeTypeForInstance(instance); ok {
+		return newLiteBackend(s), runtimeType, true
 	}
-	return backend, runtimeType, true
+	return newProBackend(s), normalizeInstanceRuntimeType(instance.RuntimeType), true
 }
 
 func (b *liteBackend) Create(ctx context.Context, userID int, req CreateInstanceRequest, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error) {
