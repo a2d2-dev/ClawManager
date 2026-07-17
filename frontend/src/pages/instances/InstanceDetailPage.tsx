@@ -497,6 +497,7 @@ const InstanceDetailPage: React.FC = () => {
       ),
     [instance],
   );
+  const isIsolatedInstance = instance?.instance_mode === "isolated";
 
   useEffect(() => {
     if (!skillPickerOpen) {
@@ -897,6 +898,13 @@ const InstanceDetailPage: React.FC = () => {
           <span>{typeLabel(instance.type)}</span>
           <span>{t("instances.instanceModePrefix", { mode: instanceModeLabel(instance.instance_mode) })}</span>
           <span>Runtime {instance.runtime_type}</span>
+          {isIsolatedInstance && (
+            <span>
+              Sandbox {status?.pod_namespace || instance.pod_namespace || "-"}
+              /
+              {status?.pod_name || instance.pod_name || "-"}
+            </span>
+          )}
           <span>{formatBytes(status?.workspace_usage_bytes ?? instance.workspace_usage_bytes)}</span>
           <span>{formatDateTime(instance.updated_at, locale)}</span>
         </div>
@@ -1308,6 +1316,42 @@ const InstanceDetailPage: React.FC = () => {
       {renderSkillPanel()}
     </div>
   );
+  const renderIsolatedWorkspace = () => (
+    <div className="flex min-h-0 flex-col gap-4">
+      {renderHeaderSection(shareLinkControl)}
+      {renderActionMessage()}
+      <section className="grid gap-4 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
+        <section className="cm-surface px-4 py-4">
+          <div className="mb-3 flex items-center gap-2">
+            <Network className="h-4 w-4 text-indigo-600" />
+            <h2 className="text-sm font-semibold text-slate-950">Runtime Backend</h2>
+          </div>
+          <div className="grid gap-2">
+            <Metric label="Backend" value={instance.runtime_type} detail="Gateway" percent={null} />
+            <Metric label="Sandbox" value={status?.pod_name || instance.pod_name || "-"} detail="Name" percent={null} />
+            <Metric label="Namespace" value={status?.pod_namespace || instance.pod_namespace || "-"} detail="Sandbox" percent={null} />
+            <Metric label="Status" value={status?.pod_status || status?.status || instance.status} detail="Availability" percent={null} />
+          </div>
+        </section>
+
+        {supportsWorkspace(instance) ? (
+          <div className="min-h-[420px] min-w-0 overflow-hidden">
+            <WorkspaceFileManager
+              instanceId={instance.id}
+              initialPath={workspaceInitialPath(instance, true)}
+              onMutation={() => fetchSkills(instance.id)}
+              refreshKey={workspaceRefreshKey}
+            />
+          </div>
+        ) : (
+          <div className="cm-surface flex min-h-[420px] items-center justify-center overflow-hidden text-sm text-slate-500">
+            No workspace
+          </div>
+        )}
+      </section>
+      {renderSkillPanel()}
+    </div>
+  );
   const runtime = runtimeDetails?.runtime;
   const agent = runtimeDetails?.agent;
   const commands = [...(runtimeDetails?.commands ?? [])].sort((left, right) => {
@@ -1521,7 +1565,7 @@ const InstanceDetailPage: React.FC = () => {
         onConfirm={() => void handleAction("delete")}
       />
 
-      {isDedicatedInstance ? renderProWorkspace() : renderLiteWorkspace()}
+      {isIsolatedInstance ? renderIsolatedWorkspace() : isDedicatedInstance ? renderProWorkspace() : renderLiteWorkspace()}
     </UserLayout>
   );
 };

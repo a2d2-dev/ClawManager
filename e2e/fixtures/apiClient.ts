@@ -56,6 +56,7 @@ export interface InstanceRecord {
   pod_name?: string;
   pod_namespace?: string;
   pod_ip?: string;
+  workspace_path?: string;
   workspace_usage_bytes?: number;
   created_at?: string;
   updated_at?: string;
@@ -122,6 +123,41 @@ export interface CreateTeamRequest {
   communication_mode?: string;
   shared_storage_gb?: number;
   members: CreateTeamMemberRequest[];
+}
+
+export interface CreateInstanceRequest {
+  name: string;
+  description?: string;
+  type: "openclaw" | "hermes" | "ubuntu" | "debian" | "centos" | "custom" | "webtop" | string;
+  mode?: "lite" | "isolated" | "pro" | string;
+  instance_mode?: "lite" | "isolated" | "pro" | string;
+  runtime_type?: "desktop" | "shell" | "gateway" | string;
+  cpu_cores: number;
+  memory_gb: number;
+  disk_gb: number;
+  gpu_enabled?: boolean;
+  gpu_count?: number;
+  os_type: string;
+  os_version: string;
+  storage_class?: string;
+}
+
+export interface InstanceStatusResponse {
+  instance_status: {
+    instance_id: number;
+    status: string;
+    availability?: "available" | "starting" | "unavailable" | string;
+    pod_name?: string;
+    pod_namespace?: string;
+    pod_status?: string;
+  };
+}
+
+export interface InstanceAccessTokenResponse {
+  token: string;
+  access_url: string;
+  proxy_url: string;
+  expires_at: string;
 }
 
 export interface InstanceExternalAccess {
@@ -337,6 +373,86 @@ export async function listInstances(
     }
   });
   return expectOkEnvelope<InstanceListResponse>(response);
+}
+
+export async function getInstance(
+  request: APIRequestContext,
+  accessToken: string,
+  instanceId: number
+): Promise<InstanceRecord> {
+  const response = await request.get(`${env.backendUrl}/instances/${instanceId}`, {
+    headers: bearer(accessToken)
+  });
+  const data = await expectOkEnvelope<{ instance: InstanceRecord }>(response);
+  return data.instance;
+}
+
+export async function createInstance(
+  request: APIRequestContext,
+  accessToken: string,
+  data: CreateInstanceRequest
+): Promise<InstanceRecord> {
+  const response = await request.post(`${env.backendUrl}/instances`, {
+    headers: bearer(accessToken),
+    data
+  });
+  return expectOkEnvelope<InstanceRecord>(response);
+}
+
+export async function deleteInstance(
+  request: APIRequestContext,
+  accessToken: string,
+  instanceId: number
+): Promise<void> {
+  const response = await request.delete(`${env.backendUrl}/instances/${instanceId}`, {
+    headers: bearer(accessToken)
+  });
+  await expectOkEnvelope<unknown>(response);
+}
+
+export async function startInstance(
+  request: APIRequestContext,
+  accessToken: string,
+  instanceId: number
+): Promise<void> {
+  const response = await request.post(`${env.backendUrl}/instances/${instanceId}/start`, {
+    headers: bearer(accessToken)
+  });
+  await expectOkEnvelope<null>(response);
+}
+
+export async function stopInstance(
+  request: APIRequestContext,
+  accessToken: string,
+  instanceId: number
+): Promise<void> {
+  const response = await request.post(`${env.backendUrl}/instances/${instanceId}/stop`, {
+    headers: bearer(accessToken)
+  });
+  await expectOkEnvelope<null>(response);
+}
+
+export async function getInstanceStatus(
+  request: APIRequestContext,
+  accessToken: string,
+  instanceId: number
+): Promise<InstanceStatusResponse["instance_status"]> {
+  const response = await request.get(`${env.backendUrl}/instances/${instanceId}/status`, {
+    headers: bearer(accessToken)
+  });
+  const data = await expectOkEnvelope<InstanceStatusResponse>(response);
+  return data.instance_status;
+}
+
+export async function generateInstanceAccessToken(
+  request: APIRequestContext,
+  accessToken: string,
+  instanceId: number
+): Promise<InstanceAccessTokenResponse> {
+  const response = await request.post(`${env.backendUrl}/instances/${instanceId}/access`, {
+    headers: bearer(accessToken)
+  });
+  return expectOkEnvelope<InstanceAccessTokenResponse>(response);
 }
 
 export async function createTeam(
