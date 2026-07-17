@@ -143,6 +143,9 @@ func TestBuildIsolatedSandboxObjectRendersSpecAndForcesProxyEnv(t *testing.T) {
 	if !strings.Contains(command, "openclaw gateway run") {
 		t.Fatalf("command = %q, want gateway-only openclaw command", command)
 	}
+	if !strings.Contains(command, "--port "+strconv.Itoa(int(isolatedGatewayPort))) {
+		t.Fatalf("command = %q, want isolated gateway port constant %d", command, isolatedGatewayPort)
+	}
 	env := envMapFromContainer(t, container)
 	if env["HTTP_PROXY"] != "http://proxy.good:3128" || env["HTTPS_PROXY"] != "http://proxy.good:3128" {
 		t.Fatalf("proxy env was not forced: %#v", env)
@@ -720,6 +723,66 @@ func TestSandboxBackendStatusAuditDoesNotReportSuspendedStopAsFinished(t *testin
 	if len(events) != 0 {
 		t.Fatalf("Suspended condition emitted audit events = %#v, want none", events)
 	}
+}
+
+func TestSandboxBackendObserveStatusMapsConditionsWithoutSandboxWritesOrAudit(t *testing.T) {
+	instance := sandboxTestInstance(292, "running")
+	conditions := []any{
+		map[string]any{"type": "Ready", "status": "False", "reason": "PodFailed", "observedGeneration": int64(3), "lastTransitionTime": "2026-07-17T03:20:00Z"},
+		map[string]any{"type": "Finished", "status": "True", "reason": "PodFailed", "observedGeneration": int64(3), "lastTransitionTime": "2026-07-17T03:21:00Z"},
+	}
+	sandbox := sandboxObjectForTest(instance, conditions)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+	var sink bytes.Buffer
+	backend.service.auditLogger = NewJSONLAuditLogger(&sink, true)
+
+	status, err := backend.ObserveStatus(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("ObserveStatus returned error: %v", err)
+	}
+	if status.Status != "creating" || status.PodStatus != "Finished/PodFailed" {
+		t.Fatalf("observe status = %#v, want creating/Finished/PodFailed", status)
+	}
+	if stored := instanceRepo.byID[instance.ID]; stored.Status != "creating" {
+		t.Fatalf("stored status = %q, want creating", stored.Status)
+	}
+	if events := auditEventsFromSink(t, &sink); len(events) != 0 {
+		t.Fatalf("ObserveStatus emitted audit events = %#v, want none", events)
+	}
+	assertAction(t, dynamicClient, "get")
+	assertNoAction(t, dynamicClient, "update")
+	assertNoAction(t, dynamicClient, "delete")
+	assertNoAction(t, dynamicClient, "create")
+}
+
+func TestSyncServiceIsolatedSyncUsesObserveOnlyStatus(t *testing.T) {
+	instance := sandboxTestInstance(293, "running")
+	conditions := []any{
+		map[string]any{"type": "Finished", "status": "True", "reason": "PodFailed", "observedGeneration": int64(3), "lastTransitionTime": "2026-07-17T03:21:00Z"},
+	}
+	sandbox := sandboxObjectForTest(instance, conditions)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	syncService := NewSyncService(
+		instanceRepo,
+		nil,
+		WithSyncRuntimeCapabilities(isolatedAvailableCapabilities()),
+		WithSyncSandboxDynamicClient(dynamicClient),
+	)
+
+	syncService.syncAllInstances()
+
+	if stored := instanceRepo.byID[instance.ID]; stored.Status != "creating" {
+		t.Fatalf("stored status after sync = %q, want creating", stored.Status)
+	}
+	assertAction(t, dynamicClient, "get")
+	assertNoAction(t, dynamicClient, "update")
+	assertNoAction(t, dynamicClient, "delete")
+	assertNoAction(t, dynamicClient, "create")
 }
 
 func TestSandboxBackendStatusMapsSuspendedAndFinishedConditions(t *testing.T) {

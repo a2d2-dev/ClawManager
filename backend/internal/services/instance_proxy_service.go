@@ -21,6 +21,9 @@ import (
 	"clawreef/internal/services/k8s"
 
 	"github.com/gorilla/websocket"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/dynamic"
 )
 
 // InstanceProxyService handles proxying requests to instance pods
@@ -30,6 +33,7 @@ type InstanceProxyService struct {
 	instanceRepo         repository.InstanceRepository
 	runtimePodRepo       repository.RuntimePodRepository
 	bindingRepo          repository.InstanceRuntimeBindingRepository
+	sandboxDynamicClient dynamic.Interface
 	httpClient           *http.Client
 	openClawGatewayToken string
 	openClawProxyOrigin  string
@@ -71,6 +75,12 @@ func WithInstanceProxyRuntimeRepositories(instanceRepo repository.InstanceReposi
 	}
 }
 
+func WithInstanceProxySandboxDynamicClient(dynamicClient dynamic.Interface) InstanceProxyServiceOption {
+	return func(s *InstanceProxyService) {
+		s.sandboxDynamicClient = dynamicClient
+	}
+}
+
 // NewInstanceProxyService creates a new instance proxy service
 func NewInstanceProxyService(accessService *InstanceAccessService, options ...InstanceProxyServiceOption) *InstanceProxyService {
 	transport := &http.Transport{
@@ -99,6 +109,11 @@ func NewInstanceProxyService(accessService *InstanceAccessService, options ...In
 		serviceCache:         make(map[serviceCacheKey]serviceCacheEntry),
 		serviceLookups:       make(map[serviceCacheKey]*serviceLookupCall),
 		serviceTTL:           defaultServiceCacheTTL,
+	}
+	if client := k8s.GetClient(); client != nil && client.Config != nil {
+		if dynamicClient, err := dynamic.NewForConfig(client.Config); err == nil {
+			service.sandboxDynamicClient = dynamicClient
+		}
 	}
 	for _, option := range options {
 		if option != nil {
@@ -456,6 +471,9 @@ func (s *InstanceProxyService) resolveV2ProxyTarget(ctx context.Context, accessT
 	if instance.UserID != accessToken.UserID {
 		return nil, false, fmt.Errorf("token does not match instance owner")
 	}
+	if mode, ok := NormalizeInstanceMode(instance.InstanceMode); ok && mode == InstanceModeIsolated {
+		return s.resolveIsolatedProxyTarget(ctx, instance, targetPath, requestPath, websocket)
+	}
 	if _, ok := v2RuntimeTypeForInstance(instance); !ok {
 		return nil, false, nil
 	}
@@ -493,6 +511,69 @@ func (s *InstanceProxyService) resolveV2ProxyTarget(ctx context.Context, accessT
 		Host:   net.JoinHostPort(strings.TrimSpace(*pod.PodIP), strconv.Itoa(binding.GatewayPort)),
 		Path:   upstreamPath,
 	}, true, nil
+}
+
+func (s *InstanceProxyService) resolveIsolatedProxyTarget(ctx context.Context, instance *models.Instance, targetPath, requestPath string, websocket bool) (*url.URL, bool, error) {
+	if !strings.EqualFold(strings.TrimSpace(instance.Status), "running") {
+		return nil, true, ErrInstanceGatewayUnavailable
+	}
+	if s.sandboxDynamicClient == nil {
+		return nil, true, fmt.Errorf("%w: agent-sandbox dynamic client is not configured", ErrInstanceGatewayUnavailable)
+	}
+
+	namespace := isolatedProxyNamespace(instance)
+	name := isolatedProxySandboxName(instance)
+	sandbox, err := s.sandboxDynamicClient.Resource(sandboxGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, true, ErrInstanceGatewayUnavailable
+	}
+	if err != nil {
+		return nil, true, fmt.Errorf("%w: failed to get isolated Sandbox %s/%s: %v", ErrInstanceGatewayUnavailable, namespace, name, err)
+	}
+
+	podIP := firstSandboxPodIP(sandbox)
+	if podIP == "" {
+		return nil, true, ErrInstanceGatewayUnavailable
+	}
+	scheme := "http"
+	if websocket {
+		scheme = "ws"
+	}
+	upstreamPath := stripInstanceProxyPrefix(targetPath, instance.ID)
+	if shouldPreserveOpenClawControlUIPath(instance) {
+		upstreamPath = openClawControlUIRequestPath(requestPath, instance.ID)
+	}
+	return &url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(podIP, strconv.Itoa(int(isolatedGatewayPort))),
+		Path:   upstreamPath,
+	}, true, nil
+}
+
+func isolatedProxyNamespace(instance *models.Instance) string {
+	if instance != nil && instance.PodNamespace != nil && strings.TrimSpace(*instance.PodNamespace) != "" {
+		return strings.TrimSpace(*instance.PodNamespace)
+	}
+	if client := k8s.GetClient(); client != nil && instance != nil {
+		return client.GetNamespace(instance.UserID)
+	}
+	if instance != nil {
+		return fmt.Sprintf("clawreef-user-%d", instance.UserID)
+	}
+	return "clawreef-user-0"
+}
+
+func isolatedProxySandboxName(instance *models.Instance) string {
+	if instance != nil && instance.PodName != nil && strings.TrimSpace(*instance.PodName) != "" {
+		return strings.TrimSpace(*instance.PodName)
+	}
+	if client := k8s.GetClient(); client != nil && instance != nil {
+		return client.GetDeploymentName(instance.ID, instance.Name)
+	}
+	if instance != nil {
+		return fmt.Sprintf("clawreef-%d-%s", instance.ID, strings.ToLower(strings.TrimSpace(instance.Name)))
+	}
+	return "clawreef-isolated"
 }
 
 // getOrCreateService gets service info or creates the service if it doesn't exist

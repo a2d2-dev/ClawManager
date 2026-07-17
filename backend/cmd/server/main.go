@@ -202,7 +202,11 @@ func main() {
 	// on exactly one replica. With leader election enabled they only run on the
 	// elected leader and migrate on failover; with it disabled (single-replica
 	// deployments) they run directly.
-	syncService := services.NewSyncService(instanceRepo, instanceRuntimeStatusService)
+	syncService := services.NewSyncService(
+		instanceRepo,
+		instanceRuntimeStatusService,
+		services.WithSyncRuntimeCapabilities(runtimeCapabilities),
+	)
 	var runtimeSchedulerCancel context.CancelFunc
 	var runtimeSchedulerMu sync.Mutex
 	var runtimeScheduler *services.RuntimeScheduler

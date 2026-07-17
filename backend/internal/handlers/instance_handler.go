@@ -1004,6 +1004,11 @@ func buildUserSafeInstanceStatus(instance *models.Instance, status *services.Ins
 	if instance == nil {
 		return payload
 	}
+	if mode, ok := services.NormalizeInstanceMode(instance.InstanceMode); ok && mode == services.InstanceModeIsolated {
+		payload["pod_name"] = status.PodName
+		payload["pod_namespace"] = status.PodNamespace
+		payload["pod_status"] = status.PodStatus
+	}
 	if agentType, ok := services.NormalizeV2RuntimeType(instance.Type); ok && (strings.EqualFold(strings.TrimSpace(instance.RuntimeType), "gateway") || strings.EqualFold(strings.TrimSpace(instance.InstanceMode), "lite")) {
 		payload["agent_type"] = agentType
 		payload["workspace_usage_bytes"] = instance.WorkspaceUsageBytes

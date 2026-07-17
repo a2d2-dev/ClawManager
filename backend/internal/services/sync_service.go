@@ -12,6 +12,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/dynamic"
 )
 
 // SyncService handles synchronization between database and K8s state
@@ -20,6 +21,8 @@ type SyncService struct {
 	runtimeStatusService InstanceRuntimeStatusService
 	podService           *k8s.PodService
 	deploymentService    *k8s.InstanceDeploymentService
+	runtimeCapabilities  RuntimeCapabilities
+	sandboxDynamicClient dynamic.Interface
 	interval             time.Duration
 
 	mu       sync.Mutex
@@ -27,15 +30,36 @@ type SyncService struct {
 	stopChan chan struct{}
 }
 
+type SyncServiceOption func(*SyncService)
+
+func WithSyncRuntimeCapabilities(capabilities RuntimeCapabilities) SyncServiceOption {
+	return func(s *SyncService) {
+		s.runtimeCapabilities = normalizeRuntimeCapabilities(capabilities)
+	}
+}
+
+func WithSyncSandboxDynamicClient(dynamicClient dynamic.Interface) SyncServiceOption {
+	return func(s *SyncService) {
+		s.sandboxDynamicClient = dynamicClient
+	}
+}
+
 // NewSyncService creates a new sync service
-func NewSyncService(instanceRepo repository.InstanceRepository, runtimeStatusService InstanceRuntimeStatusService) *SyncService {
-	return &SyncService{
+func NewSyncService(instanceRepo repository.InstanceRepository, runtimeStatusService InstanceRuntimeStatusService, options ...SyncServiceOption) *SyncService {
+	service := &SyncService{
 		instanceRepo:         instanceRepo,
 		runtimeStatusService: runtimeStatusService,
 		podService:           k8s.NewPodService(),
 		deploymentService:    k8s.NewInstanceDeploymentService(),
+		runtimeCapabilities:  normalizeRuntimeCapabilities(RuntimeCapabilities{}),
 		interval:             5 * time.Second, // Sync every 5 seconds for more responsive status updates
 	}
+	for _, option := range options {
+		if option != nil {
+			option(service)
+		}
+	}
+	return service
 }
 
 // Start starts the sync loop. It is safe to call repeatedly: a second call
@@ -120,6 +144,10 @@ func (s *SyncService) syncAllInstances() {
 
 // syncInstance synchronizes a single instance's state
 func (s *SyncService) syncInstance(ctx context.Context, instance *models.Instance) {
+	if mode, ok := NormalizeInstanceMode(instance.InstanceMode); ok && mode == InstanceModeIsolated {
+		s.syncIsolatedInstance(ctx, instance)
+		return
+	}
 	if _, ok := v2RuntimeTypeForInstance(instance); ok {
 		s.updateInfraStatus(instance.ID, instance.Status)
 		return
@@ -227,6 +255,25 @@ func (s *SyncService) syncInstance(ctx context.Context, instance *models.Instanc
 			GetHub().BroadcastInstanceStatus(instance.UserID, instance)
 		}
 	}
+}
+
+func (s *SyncService) syncIsolatedInstance(ctx context.Context, instance *models.Instance) {
+	backend := newSandboxBackend(&instanceService{
+		instanceRepo:        s.instanceRepo,
+		runtimeCapabilities: s.runtimeCapabilities,
+	})
+	if s.sandboxDynamicClient != nil {
+		backend.dynamicClient = s.sandboxDynamicClient
+	}
+	status, err := backend.ObserveStatus(ctx, instance)
+	if err != nil {
+		fmt.Printf("Instance %d: failed to sync isolated Sandbox status: %v\n", instance.ID, err)
+		return
+	}
+	if status == nil {
+		return
+	}
+	s.updateInfraStatus(instance.ID, status.Status)
 }
 
 func (s *SyncService) syncDeploymentInstance(ctx context.Context, instance *models.Instance) {

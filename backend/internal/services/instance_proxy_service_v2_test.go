@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"clawreef/internal/repository"
 
 	"github.com/gorilla/websocket"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestInstanceProxyServiceUsesRuntimeBindingForV2(t *testing.T) {
@@ -78,6 +80,76 @@ func TestInstanceProxyServiceUsesRuntimeBindingForV2(t *testing.T) {
 		t.Fatalf("ProxyRequest returned error: %v", err)
 	}
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("unexpected proxy response %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestInstanceProxyServiceUsesIsolatedSandboxPodIPAndGatewayPort(t *testing.T) {
+	instanceToken := "igt_isolated_instance"
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/instances/144/proxy/apps/openclaw" {
+			t.Fatalf("unexpected upstream path %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer "+instanceToken {
+			t.Fatalf("Authorization = %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("isolated-ok"))
+	}))
+	defer upstream.Close()
+
+	podIP, _ := splitURLHostPortForProxyTest(t, upstream.URL)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[144] = &models.Instance{
+		ID:           144,
+		UserID:       45,
+		Name:         "isolated",
+		Type:         "openclaw",
+		RuntimeType:  RuntimeBackendGateway,
+		InstanceMode: InstanceModeIsolated,
+		Status:       "running",
+		AccessToken:  &instanceToken,
+		PodName:      optionalString("sandbox-144"),
+		PodNamespace: optionalString("clawreef-user-45"),
+	}
+	dynamicClient := newDynamicClientWithSandboxes(t, &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": sandboxAPIVersion,
+		"kind":       sandboxKind,
+		"metadata": map[string]any{
+			"name":      "sandbox-144",
+			"namespace": "clawreef-user-45",
+		},
+		"status": map[string]any{
+			"podIPs": []any{podIP},
+		},
+	}})
+	accessService := NewInstanceAccessService()
+	defer accessService.Stop()
+	token, err := accessService.GenerateToken(45, 144, "openclaw", "/api/v1/instances/144/proxy/", "", 3000, time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken returned error: %v", err)
+	}
+	service := NewInstanceProxyService(accessService)
+	service.instanceRepo = instanceRepo
+	service.bindingRepo = newFakeRuntimeBindingRepo()
+	service.runtimePodRepo = &fakeRuntimePodRepo{}
+	service.sandboxDynamicClient = dynamicClient
+	service.httpClient = &http.Client{Transport: &http.Transport{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if address == net.JoinHostPort(podIP, strconv.Itoa(int(isolatedGatewayPort))) {
+				address = upstream.Listener.Addr().String()
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/instances/144/proxy/apps/openclaw?token="+url.QueryEscape(token.Token), nil)
+	rec := httptest.NewRecorder()
+
+	if err := service.ProxyRequest(req.Context(), 144, token.Token, rec, req); err != nil {
+		t.Fatalf("ProxyRequest returned error: %v", err)
+	}
+	if rec.Code != http.StatusOK || rec.Body.String() != "isolated-ok" {
 		t.Fatalf("unexpected proxy response %d %q", rec.Code, rec.Body.String())
 	}
 }

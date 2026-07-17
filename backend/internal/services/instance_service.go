@@ -1165,11 +1165,19 @@ func (s *instanceService) ForceSyncInstance(instanceID int) error {
 		return fmt.Errorf("instance not found")
 	}
 
-	if _, ok := v2RuntimeTypeForInstance(instance); ok {
-		return nil
-	}
 	if instanceUsesDesktopRuntime(instance) {
 		return s.forceSyncDeploymentInstance(ctx, instance)
+	}
+	if mode, ok := NormalizeInstanceMode(instance.InstanceMode); ok && mode == InstanceModeIsolated {
+		if backend, _, ok, err := s.runtimeBackendForInstance(instance); err != nil {
+			return err
+		} else if ok {
+			_, err := backend.Status(ctx, instance)
+			return err
+		}
+	}
+	if _, ok := v2RuntimeTypeForInstance(instance); ok {
+		return nil
 	}
 
 	fmt.Printf("Force syncing instance %d (current status: %s, user: %d)\n", instanceID, instance.Status, instance.UserID)
