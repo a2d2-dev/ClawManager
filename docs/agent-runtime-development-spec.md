@@ -381,7 +381,80 @@ Pod 重启或升级时：
 - 收到 SIGTERM 时进入 draining，拒绝新 create，尽量上报最后状态。
 - 支持 ClawManager 下发 drain、stop、restart gateway 指令。
 
-## 12. 健康检查
+## 12. Pod 侧 GET /metrics 拉取契约
+
+本节新增 Pod 侧 Prometheus scrape 契约。它是现有 push 上报机制的补充，不替代、不修改第 11 节的 Runtime Pod 注册、heartbeat、metrics、gateways、skills 等 POST 上报协议。agent 仍必须按既有协议主动上报 ClawManager；`GET /metrics` 只服务 Prometheus 拉取。
+
+### 12.1 Endpoint
+
+agent 必须在现有控制服务端口上提供：
+
+```http
+GET /metrics
+```
+
+该端口与第 4 节中的 `RUNTIME_AGENT_LISTEN_ADDR` / `RUNTIME_AGENT_PUBLIC_PORT` 对齐，也就是 `/v1/health`、`/v1/gateways` 等控制接口已经使用的 agent 端口。不要为 metrics 新增端口号，也不要赋予新的端口语义。
+
+响应必须使用 Prometheus text format。建议响应头：
+
+```http
+Content-Type: text/plain; version=0.0.4; charset=utf-8
+```
+
+### 12.2 v1 指标目录
+
+v1 建议暴露以下指标。指标名为建议名称，runtime 可以在实现时按统一命名前缀微调，但语义、类型和 cardinality 约束必须保持一致。
+
+| 指标 | 类型 | 含义 |
+| --- | --- | --- |
+| `runtime_agent_build_info` | gauge | agent build 信息，值恒为 `1`，可带 `version`、`git_commit`、`runtime_type` 等低基数字段。 |
+| `runtime_agent_gateway_up` | gauge | 每个 gateway 槽位的存活状态，`1` 表示该槽位上的 gateway 进程存在且健康，`0` 表示不存在或不健康；标签必须使用有界槽位身份，例如本地端口或 slot，不使用用户实例身份。 |
+| `runtime_agent_commands_total` | counter | agent 收到并处理的控制命令总数，例如 create、delete、drain、restart；标签只允许有限枚举的 `command`、`status`。 |
+| `runtime_agent_command_duration_seconds` | histogram | 控制命令处理耗时，bucket 由 runtime-agent 实现统一定义；标签规则同 command counter。 |
+| `runtime_agent_skill_installs_total` | counter | skill install 尝试总数和结果；v1 不在该指标上暴露 skill 名称或实例身份。 |
+| `runtime_agent_cpu_usage_cores` | gauge | 当前 Pod/agent 视角的 CPU 使用量，单位为 cores。 |
+| `runtime_agent_memory_usage_bytes` | gauge | 当前 Pod/agent 视角的内存使用量，单位为 bytes。 |
+| `runtime_agent_disk_usage_bytes` | gauge | workspace 或 runtime 数据目录的磁盘使用量，单位为 bytes；目录标签必须是有限枚举。 |
+
+### 12.3 身份和 Cardinality 规则
+
+指标目标身份必须通过 Kubernetes Pod labels 加 Prometheus scrape-config relabeling 获得，例如 runtime type、pod name、namespace、node 等目标标签由 Prometheus 自动发现和 relabel 注入。agent 暴露的 Prometheus text payload 只描述本 Pod 内部的运行状态。
+
+规范性要求：
+
+- agent MUST NOT 在任意 per-series 样本上附加 `instance` label。
+- agent MUST NOT 在指标标签中暴露 `instance_id`、`user_id`、workspace path、gateway id、token、API key 或其他用户级身份。
+- per-gateway 指标 MUST 使用端口、slot 或其他容量上限明确的本地身份；这些身份的取值数量必须被 Pod 容量或端口池上限约束。
+- command、status、result 等标签 MUST 是有限枚举。
+
+这些限制的目的，是在 runtime 实例频繁创建、删除、重启的场景下保持 Prometheus series 数量有界，避免用户实例生命周期直接放大指标基数。
+
+### 12.4 抓取发现机制
+
+Prometheus 抓取发现通过 runtime Pod template 上的 `prometheus.io/*` annotations 完成。推荐语义：
+
+```yaml
+prometheus.io/scrape: "true"
+prometheus.io/path: "/metrics"
+prometheus.io/port: "${RUNTIME_AGENT_PUBLIC_PORT}"
+```
+
+`prometheus.io/port` 必须指向第 4 节定义的 agent public port，不能写成新的 metrics 专用端口。
+
+这些 annotations 由 sandboxBackend 相关 ticket #8 交付：sandboxBackend 在生成 runtime Pod template 时写入 annotations，Prometheus 通过 Kubernetes Pod service discovery 发现目标并按 scrape config relabeling 生成目标身份。
+
+### 12.5 v1 非目标
+
+以下内容明确不属于 v1 范围：
+
+- ClawManager server 侧 Prometheus endpoint。
+- Prometheus Operator `ServiceMonitor` 资源。
+
+### 12.6 交付状态 Caveat
+
+本节是契约层面的新增内容。runtime-agent 侧 `GET /metrics` endpoint 的具体实现 owner 尚未确认；实现工作在 runtime-agent 轨道上，需要等待 owner 确认后才会交付。它不是 ClawManager v1 系列已承诺的交付物（not a committed v1 deliverable）。
+
+## 13. 健康检查
 
 `/v1/health` 只有在 agent 能接受控制指令时才返回 2xx。以下情况必须返回 503：
 
@@ -402,7 +475,7 @@ gateway 从 `starting` 转为 `running` 前至少校验：
 
 健康检查失败时不要上报 `running`。应上报 `error`，并带短错误文本。
 
-## 13. 安全规范
+## 14. 安全规范
 
 agent 控制接口必须校验：
 
@@ -427,7 +500,7 @@ execve(binary, ["hermes", "gateway", "run", "--port", "20017"], env)
 - 删除 gateway 时顺手删除 workspace。
 - 为了调通临时写死 IP、CIDR 或 `allowedOrigins=["*"]`，除非明确是本地开发环境。
 
-## 14. Hermes Runtime 开发落地清单
+## 15. Hermes Runtime 开发落地清单
 
 开发 Hermes runtime 时，至少完成以下事项：
 
@@ -453,7 +526,7 @@ Hermes 启动命令由 Hermes 项目确定，但 agent 必须保证：
 - LLM、proxy、auth 配置在进程启动前已经写入。
 - `POST /v1/gateways` 返回时进程可以仍在启动，但 metadata 必须已经持久化。
 
-## 15. 测试和验收
+## 16. 测试和验收
 
 单元测试至少覆盖：
 
@@ -498,7 +571,7 @@ kubectl -n clawmanager-system exec deploy/clawmanager-app -- date -u
 5. allowed origins 和 trusted proxies 是否使用内部服务地址和 env CIDR。
 6. gateway 是否真正健康，而不是缓存状态误报。
 
-## 16. Do / Don't
+## 17. Do / Don't
 
 | Do | Don't |
 | --- | --- |
