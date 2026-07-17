@@ -365,19 +365,13 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	if err := s.enforceInstanceModeLimits(ctx, instanceMode, req.CPUCores, req.MemoryGB, req.DiskGB, requestedGPU); err != nil {
 		return nil, err
 	}
-	backend, ok := s.runtimeBackendForMode(instanceMode)
-	if !ok {
-		return nil, fmt.Errorf("runtime backend %q is not configured", instanceMode)
+	// Create follows the same legacy V2 predicate split as persisted instance
+	// dispatch: only normalized V2 lite requests use Lite; all other inputs keep
+	// the legacy Pro fallback. instance_mode authority is deferred to issue #7.
+	if runtimeType, isV2 := NormalizeV2RuntimeType(req.Type); isV2 && instanceMode == InstanceModeLite {
+		return newLiteBackend(s).Create(ctx, userID, req, runtimeType, environmentOverridesJSON)
 	}
-	backendRuntimeType := modeRuntimeType
-	if instanceMode == InstanceModeLite {
-		runtimeType, isV2 := NormalizeV2RuntimeType(req.Type)
-		if !isV2 {
-			return nil, fmt.Errorf("runtime backend %q does not support instance type %q", instanceMode, req.Type)
-		}
-		backendRuntimeType = runtimeType
-	}
-	return backend.Create(ctx, userID, req, backendRuntimeType, environmentOverridesJSON)
+	return newProBackend(s).Create(ctx, userID, req, modeRuntimeType, environmentOverridesJSON)
 }
 
 // GetByID gets an instance by ID
