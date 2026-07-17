@@ -1,5 +1,7 @@
 # RFC: Isolated Instance Mode
 
+> **Status (2026-07-17)**: a complete reference implementation of this RFC has been built and merged on the fork `a2d2-dev/ClawManager` — the RuntimeBackend refactor (PRs #15, #18), the three-value instance mode with capability gating and UI (PR #20), the `sandboxBackend` on agent-sandbox v0.5.1 (PR #21), gateway access and an e2e spec (PR #24). The agent-sandbox substrate was validated empirically on a live cluster (fork issue #3): the `Suspended` operating mode frees the Pod while preserving the PVC and its data, `Finished(PodFailed)` is not auto-recovered upstream (kubernetes-sigs/agent-sandbox#729), the PVC's ownerReference points at the Sandbox CR (so CR deletion cascades), and stale conditions can coexist with current ones. Every finding is reflected in the implementation. Section 3 remains the decision requested from upstream maintainers.
+
 ## 1. Motivation
 
 ClawManager currently has a useful but incomplete instance-mode split for headless agent workloads:
