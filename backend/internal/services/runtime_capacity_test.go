@@ -36,17 +36,26 @@ func TestRuntimeLinuxID(t *testing.T) {
 	}
 }
 
-func TestInstanceModeRuntimeTypeMapping(t *testing.T) {
-	if got, ok := RuntimeTypeForInstanceMode(" lite "); !ok || got != RuntimeBackendGateway {
-		t.Fatalf("lite runtime type = %q/%v, want gateway/true", got, ok)
+func TestNormalizeInstanceModeAcceptsThreeValues(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: " lite ", want: InstanceModeLite},
+		{input: "Isolated", want: InstanceModeIsolated},
+		{input: "Pro", want: InstanceModePro},
+	} {
+		got, ok := NormalizeInstanceMode(tc.input)
+		if !ok || got != tc.want {
+			t.Fatalf("NormalizeInstanceMode(%q) = %q/%v, want %q/true", tc.input, got, ok, tc.want)
+		}
 	}
-	if got, ok := RuntimeTypeForInstanceMode("Pro"); !ok || got != RuntimeBackendDesktop {
-		t.Fatalf("pro runtime type = %q/%v, want desktop/true", got, ok)
-	}
-	if got := InstanceModeForRuntimeType(RuntimeBackendGateway); got != InstanceModeLite {
-		t.Fatalf("gateway mode = %q, want lite", got)
-	}
-	if got := InstanceModeForRuntimeType(RuntimeBackendDesktop); got != InstanceModePro {
-		t.Fatalf("desktop mode = %q, want pro", got)
+}
+
+func TestNormalizeInstanceModeRejectsUnknownValues(t *testing.T) {
+	for _, input := range []string{"", "gateway", "sandbox", "dedicated"} {
+		if got, ok := NormalizeInstanceMode(input); ok {
+			t.Fatalf("NormalizeInstanceMode(%q) = %q/true, want rejected", input, got)
+		}
 	}
 }

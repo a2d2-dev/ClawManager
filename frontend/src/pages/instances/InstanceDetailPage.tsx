@@ -338,6 +338,10 @@ const InstanceDetailPage: React.FC = () => {
   const skillPickerRef = useRef<HTMLDivElement | null>(null);
   const skillUploadInputRef = useRef<HTMLInputElement | null>(null);
   const desktopFrameRef = useRef<HTMLDivElement | null>(null);
+  const instanceModeLabel = (mode: Instance["instance_mode"]) => {
+    if (mode === "isolated") return t("instances.instanceModeIsolated");
+    return mode === "pro" ? t("instances.instanceModePro") : t("instances.instanceModeLite");
+  };
   const [skillLoading, setSkillLoading] = useState(false);
   const [skillError, setSkillError] = useState<string | null>(null);
   const [skillNotice, setSkillNotice] = useState<string | null>(null);
@@ -891,7 +895,7 @@ const InstanceDetailPage: React.FC = () => {
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500">
           <span>{typeLabel(instance.type)}</span>
-          <span>Mode {instance.instance_mode === "pro" ? "Pro" : "Lite"}</span>
+          <span>{t("instances.instanceModePrefix", { mode: instanceModeLabel(instance.instance_mode) })}</span>
           <span>Runtime {instance.runtime_type}</span>
           <span>{formatBytes(status?.workspace_usage_bytes ?? instance.workspace_usage_bytes)}</span>
           <span>{formatDateTime(instance.updated_at, locale)}</span>

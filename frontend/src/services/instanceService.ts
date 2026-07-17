@@ -14,6 +14,7 @@ import type {
   BatchCreateLiteInstancesRequest,
   BatchCreateLiteInstancesResponse,
   BatchDeleteLiteInstancesResponse,
+  RuntimeCapabilities,
 } from "../types/instance";
 import type { InstanceSkill } from "../types/skill";
 
@@ -32,6 +33,11 @@ export const instanceService = {
   // Create instance
   createInstance: async (data: CreateInstanceRequest): Promise<Instance> => {
     const response = await api.post("/instances", data);
+    return response.data.data;
+  },
+
+  getRuntimeCapabilities: async (): Promise<RuntimeCapabilities> => {
+    const response = await api.get("/runtime-capabilities");
     return response.data.data;
   },
 

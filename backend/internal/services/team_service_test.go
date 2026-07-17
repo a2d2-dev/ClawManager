@@ -435,6 +435,35 @@ func TestPlanTeamMembersSupportsHermesRuntime(t *testing.T) {
 	}
 }
 
+func TestCreateTeamRejectsIsolatedMemberBeforeDBWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		member CreateTeamMemberRequest
+	}{
+		{name: "instance_mode isolated", member: CreateTeamMemberRequest{MemberID: "lead", Role: "leader", InstanceMode: InstanceModeIsolated}},
+		{name: "instance_mode isolated with mode", member: CreateTeamMemberRequest{MemberID: "lead", Role: "leader", Mode: InstanceModePro, InstanceMode: InstanceModeIsolated}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &teamRepositoryStub{}
+			service := &teamService{repo: repo}
+
+			_, err := service.CreateTeam(7, CreateTeamRequest{
+				Name: "isolated-team",
+				Members: []CreateTeamMemberRequest{
+					tc.member,
+					{MemberID: "worker", Role: "developer"},
+				},
+			})
+			if err == nil || err.Error() != "isolated not supported for team member instances yet" {
+				t.Fatalf("expected isolated team member mode rejection, got %v", err)
+			}
+			if repo.createdTeamCount != 0 || repo.createdMemberCount != 0 {
+				t.Fatalf("isolated rejection must happen before DB writes, created teams=%d members=%d", repo.createdTeamCount, repo.createdMemberCount)
+			}
+		})
+	}
+}
+
 func TestTeamMemberInstanceNameUsesTeamIDAndMemberKey(t *testing.T) {
 	name := teamMemberInstanceName("Software Engineering Team", 42, "code-reviewer")
 	if name != "software-engineering-team-42-code-reviewer" {
@@ -4776,19 +4805,21 @@ func TestReconcileDeferredCompletionNeverReusesReportFromOlderPlan(t *testing.T)
 }
 
 type teamRepositoryStub struct {
-	mu               sync.Mutex
-	teamsByID        map[int]*models.Team
-	membersByID      map[int]*models.TeamMember
-	membersByKey     map[string]*models.TeamMember
-	tasksByID        map[int]*models.TeamTask
-	tasksByMessageID map[string]*models.TeamTask
-	createdEvents    []models.TeamEvent
-	workItems        []models.TeamWorkItem
-	workflowPhases   []models.TeamWorkflowPhase
-	outboxRows       []models.TeamEventOutbox
-	updatedTask      *models.TeamTask
-	updatedMember    *models.TeamMember
-	updatedTeam      *models.Team
+	mu                 sync.Mutex
+	teamsByID          map[int]*models.Team
+	membersByID        map[int]*models.TeamMember
+	membersByKey       map[string]*models.TeamMember
+	tasksByID          map[int]*models.TeamTask
+	tasksByMessageID   map[string]*models.TeamTask
+	createdEvents      []models.TeamEvent
+	createdTeamCount   int
+	createdMemberCount int
+	workItems          []models.TeamWorkItem
+	workflowPhases     []models.TeamWorkflowPhase
+	outboxRows         []models.TeamEventOutbox
+	updatedTask        *models.TeamTask
+	updatedMember      *models.TeamMember
+	updatedTeam        *models.Team
 }
 
 type teamOpenClawConfigPlannerStub struct {
@@ -4806,7 +4837,10 @@ func (s *teamOpenClawConfigPlannerStub) PlanWithoutTeamMemberLeaderOnlyChannels(
 	return s.nextPlan, s.err
 }
 
-func (s *teamRepositoryStub) CreateTeam(team *models.Team) error { return nil }
+func (s *teamRepositoryStub) CreateTeam(team *models.Team) error {
+	s.createdTeamCount++
+	return nil
+}
 func (s *teamRepositoryStub) UpdateTeam(team *models.Team) error {
 	clone := *team
 	s.updatedTeam = &clone
@@ -4831,7 +4865,10 @@ func (s *teamRepositoryStub) ListActiveTeams() ([]models.Team, error) { return n
 func (s *teamRepositoryStub) CountTeamsByUserID(userID int) (int, error) {
 	return 0, nil
 }
-func (s *teamRepositoryStub) CreateMember(member *models.TeamMember) error { return nil }
+func (s *teamRepositoryStub) CreateMember(member *models.TeamMember) error {
+	s.createdMemberCount++
+	return nil
+}
 func (s *teamRepositoryStub) UpdateMember(member *models.TeamMember) error {
 	clone := *member
 	s.updatedMember = &clone

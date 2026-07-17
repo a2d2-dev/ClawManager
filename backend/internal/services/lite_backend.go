@@ -16,7 +16,7 @@ import (
 var ErrRuntimeSuspendUnsupported = errors.New("runtime suspend is not supported")
 
 type RuntimeBackend interface {
-	Create(ctx context.Context, userID int, req CreateInstanceRequest, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error)
+	Create(ctx context.Context, userID int, req CreateInstanceRequest, instanceMode string, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error)
 	Start(ctx context.Context, instance *models.Instance, runtimeType string) error
 	Stop(ctx context.Context, instance *models.Instance) error
 	Delete(ctx context.Context, instance *models.Instance) error
@@ -69,6 +69,8 @@ func (s *instanceService) runtimeBackendForMode(mode string) (RuntimeBackend, bo
 	switch normalizedMode {
 	case InstanceModeLite:
 		return newLiteBackend(s), true
+	case InstanceModeIsolated:
+		return newIsolatedGateBackend(s), true
 	case InstanceModePro:
 		return newProBackend(s), true
 	default:
@@ -76,30 +78,41 @@ func (s *instanceService) runtimeBackendForMode(mode string) (RuntimeBackend, bo
 	}
 }
 
-// runtimeBackendForInstance intentionally preserves the legacy V2 predicate as
-// a binary dispatch: V2 gateway/lite instances use Lite, and every other
-// persisted state falls back to the legacy Pro path. Making instance_mode
-// authoritative and introducing a third mode is deferred to issue #7.
-func (s *instanceService) runtimeBackendForInstance(instance *models.Instance) (RuntimeBackend, string, bool) {
+func (s *instanceService) runtimeBackendForInstance(instance *models.Instance) (RuntimeBackend, string, bool, error) {
 	if instance == nil {
-		return nil, "", false
+		return nil, "", false, fmt.Errorf("invalid instance mode for instance_id=0: instance is nil; repair instance data before dispatch")
 	}
-	if runtimeType, ok := v2RuntimeTypeForInstance(instance); ok {
-		return newLiteBackend(s), runtimeType, true
+	mode, err := modeForExistingInstance(instance)
+	if err != nil {
+		return nil, "", false, err
 	}
-	return newProBackend(s), normalizeInstanceRuntimeType(instance.RuntimeType), true
+	backend, ok := s.runtimeBackendForMode(mode)
+	if !ok {
+		return nil, "", false, nil
+	}
+	return backend, normalizeInstanceRuntimeType(instance.RuntimeType), true, nil
 }
 
-func (b *liteBackend) Create(ctx context.Context, userID int, req CreateInstanceRequest, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error) {
+func (b *liteBackend) Create(ctx context.Context, userID int, req CreateInstanceRequest, instanceMode string, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error) {
+	if instanceMode != InstanceModeLite {
+		return nil, fmt.Errorf("lite runtime backend cannot create %s instances", instanceMode)
+	}
+	if runtimeType != RuntimeBackendGateway {
+		return nil, fmt.Errorf("lite runtime backend requires runtime_type=gateway")
+	}
+	managedRuntimeType, ok := NormalizeV2RuntimeType(req.Type)
+	if !ok {
+		return nil, fmt.Errorf("lite runtime backend requires managed runtime type")
+	}
 	now := time.Now()
 	workspaceRoot := b.runtimeWorkspaceRoot()
 	instance := &models.Instance{
 		UserID:                   userID,
 		Name:                     strings.TrimSpace(req.Name),
 		Description:              trimOptionalString(req.Description),
-		Type:                     runtimeType,
+		Type:                     managedRuntimeType,
 		RuntimeType:              RuntimeBackendGateway,
-		InstanceMode:             InstanceModeLite,
+		InstanceMode:             instanceMode,
 		Status:                   "creating",
 		CPUCores:                 req.CPUCores,
 		MemoryGB:                 req.MemoryGB,
@@ -153,7 +166,7 @@ func (b *liteBackend) Create(ctx context.Context, userID int, req CreateInstance
 		}
 	}
 
-	workspacePath, err := ensureRuntimeWorkspaceDirectories(workspaceRoot, runtimeType, userID, instance.ID)
+	workspacePath, err := ensureRuntimeWorkspaceDirectories(workspaceRoot, managedRuntimeType, userID, instance.ID)
 	if err != nil {
 		_ = b.instanceRepo.Delete(instance.ID)
 		return nil, fmt.Errorf("failed to create instance workspace: %w", err)

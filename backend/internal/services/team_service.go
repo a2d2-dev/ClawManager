@@ -995,7 +995,10 @@ func (s *teamService) buildTeamMemberInstanceRequestWithSecrets(team *models.Tea
 	if instanceMode == "" {
 		instanceMode = InstanceModeLite
 	}
-	runtimeBackendType, _ := RuntimeTypeForInstanceMode(instanceMode)
+	runtimeBackendType := RuntimeBackendGateway
+	if instanceMode == InstanceModePro {
+		runtimeBackendType = RuntimeBackendDesktop
+	}
 	memberEnv := s.teamMemberEnv(team, memberPlan)
 	if instanceMode == InstanceModeLite {
 		memberEnv["CLAWMANAGER_TEAM_SHARED_DIR"] = s.teamRuntimeSharedPath(team)
@@ -2149,7 +2152,14 @@ func effectiveTeamMemberRole(member plannedTeamMember) string {
 }
 
 func (s *teamService) writeLiteTeamMemberIdentityFiles(instance *models.Instance, team *models.Team, member plannedTeamMember, rosterJSON string) error {
-	if instance == nil || modeForExistingInstance(instance) != InstanceModeLite {
+	if instance == nil {
+		return nil
+	}
+	instanceMode, err := modeForExistingInstance(instance)
+	if err != nil {
+		return err
+	}
+	if instanceMode != InstanceModeLite {
 		return nil
 	}
 	workspacePath := ""
@@ -9393,17 +9403,32 @@ func normalizeTeamMemberRuntimeType(raw string) (string, error) {
 }
 
 func normalizeTeamMemberInstanceMode(rawMode, rawInstanceMode string) (string, error) {
-	if mode, ok := NormalizeInstanceMode(rawMode); ok {
-		return mode, nil
+	modeRaw := strings.TrimSpace(rawMode)
+	instanceModeRaw := strings.TrimSpace(rawInstanceMode)
+	selectedMode := ""
+	if mode, ok := NormalizeInstanceMode(modeRaw); ok {
+		if mode == InstanceModeIsolated {
+			return "", fmt.Errorf("isolated not supported for team member instances yet")
+		}
+		selectedMode = mode
 	}
-	if strings.TrimSpace(rawMode) != "" {
+	if modeRaw != "" && selectedMode == "" {
 		return "", fmt.Errorf("unsupported team member instance mode: %s", rawMode)
 	}
-	if mode, ok := NormalizeInstanceMode(rawInstanceMode); ok {
-		return mode, nil
+	if mode, ok := NormalizeInstanceMode(instanceModeRaw); ok {
+		if mode == InstanceModeIsolated {
+			return "", fmt.Errorf("isolated not supported for team member instances yet")
+		}
+		if selectedMode != "" && selectedMode != mode {
+			return "", fmt.Errorf("unsupported team member instance mode: mode=%s conflicts with instance_mode=%s", selectedMode, mode)
+		}
+		selectedMode = mode
 	}
-	if strings.TrimSpace(rawInstanceMode) != "" {
+	if instanceModeRaw != "" && selectedMode == "" {
 		return "", fmt.Errorf("unsupported team member instance mode: %s", rawInstanceMode)
+	}
+	if selectedMode != "" {
+		return selectedMode, nil
 	}
 	return InstanceModeLite, nil
 }

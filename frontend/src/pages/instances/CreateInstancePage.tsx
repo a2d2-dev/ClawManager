@@ -10,7 +10,7 @@ import { instanceService } from "../../services/instanceService";
 import { skillService } from "../../services/skillService";
 import { userService } from "../../services/userService";
 import { INSTANCE_TYPES, PRESET_CONFIGS } from "../../types/instance";
-import type { CreateInstanceRequest, InstanceMode } from "../../types/instance";
+import type { CreateInstanceRequest, InstanceMode, RuntimeCapabilities } from "../../types/instance";
 import type { Instance } from "../../types/instance";
 import type { OpenClawConfigCompilePreview } from "../../types/openclawConfig";
 import type { Skill } from "../../types/skill";
@@ -119,17 +119,22 @@ const CREATE_INSTANCE_TYPES = INSTANCE_TYPES.filter((type) =>
 
 const INSTANCE_MODE_OPTIONS: {
   id: InstanceMode;
-  label: string;
+  labelKey: string;
   descriptionKey: string;
 }[] = [
   {
     id: "lite",
-    label: "Lite",
+    labelKey: "instances.instanceModeLite",
     descriptionKey: "instances.instanceModeLiteDescription",
   },
   {
+    id: "isolated",
+    labelKey: "instances.instanceModeIsolated",
+    descriptionKey: "instances.instanceModeIsolatedDescription",
+  },
+  {
     id: "pro",
-    label: "Pro",
+    labelKey: "instances.instanceModePro",
     descriptionKey: "instances.instanceModeProDescription",
   },
 ];
@@ -442,6 +447,8 @@ const CreateInstancePage: React.FC = () => {
   const [selectedRuntimeImageKey, setSelectedRuntimeImageKey] = useState("");
   const [quota, setQuota] = useState<UserQuota | null>(null);
   const [instances, setInstances] = useState<Instance[]>([]);
+  const [runtimeCapabilities, setRuntimeCapabilities] =
+    useState<RuntimeCapabilities | null>(null);
   const [openClawImportFile, setOpenClawImportFile] = useState<File | null>(
     null,
   );
@@ -503,7 +510,12 @@ const CreateInstancePage: React.FC = () => {
   const selectedType = availableTypes.find((item) => item.id === formData.type);
   const selectedMode = formData.mode ?? "lite";
   const selectedRuntimeType =
-    selectedMode === "lite" ? "gateway" : "desktop";
+    selectedMode === "pro" ? "desktop" : "gateway";
+  const isolatedCapability = runtimeCapabilities?.instance_modes?.isolated;
+  const isolatedUnavailableReason =
+    isolatedCapability?.available === false
+      ? isolatedCapability.reason || t("instances.instanceModeIsolatedUnavailable")
+      : null;
   const runtimeImageOptions = runtimeImageSettings.filter(
     (item) =>
       item.is_enabled !== false &&
@@ -514,13 +526,13 @@ const CreateInstancePage: React.FC = () => {
     runtimeImageOptions.find(
       (item) => getRuntimeImageOptionKey(item) === selectedRuntimeImageKey,
     ) ?? runtimeImageOptions[0] ?? null;
-  const usesDedicatedResources = selectedMode === "pro";
+  const usesDedicatedResources = selectedMode !== "lite";
   const showRuntimeImageSelector = selectedMode === "pro";
   const instanceUsesDedicatedResources = (instance: Instance) => {
     const instanceMode = (
       instance as Instance & { instance_mode?: InstanceMode }
     ).instance_mode;
-    return instanceMode === "pro" || (!instanceMode && instance.runtime_type !== "gateway");
+    return instanceMode === "pro" || instanceMode === "isolated" || (!instanceMode && instance.runtime_type !== "gateway");
   };
 
   const renderInstanceModeSelector = () => (
@@ -528,32 +540,47 @@ const CreateInstancePage: React.FC = () => {
       <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-[#b46c50]">
         {t("instances.instanceMode")}
       </h3>
-      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
         {INSTANCE_MODE_OPTIONS.map((mode) => {
           const selected = selectedMode === mode.id;
+          const disabled =
+            mode.id === "isolated" &&
+            (!isolatedCapability || isolatedCapability.available === false);
           return (
             <button
               key={mode.id}
               type="button"
-              onClick={() =>
+              disabled={disabled}
+              title={disabled ? isolatedUnavailableReason ?? t("instances.instanceModeChecking") : undefined}
+              onClick={() => {
+                if (disabled) {
+                  return;
+                }
                 setFormData((current) => ({
                   ...current,
                   mode: mode.id,
                   instance_mode: mode.id,
-                }))
-              }
+                }));
+              }}
               className={`rounded-[20px] border p-4 text-left transition-all ${
                 selected
                   ? "border-indigo-500 bg-indigo-50 ring-2 ring-indigo-500"
+                  : disabled
+                    ? "cursor-not-allowed border-gray-200 bg-gray-50 opacity-60"
                   : "border-gray-200 bg-white hover:border-indigo-200"
               }`}
             >
               <span className="text-sm font-semibold text-gray-950">
-                {mode.label}
+                {t(mode.labelKey)}
               </span>
               <span className="mt-1 block text-sm text-gray-500">
                 {t(mode.descriptionKey)}
               </span>
+              {disabled && (
+                <span className="mt-2 block text-xs text-amber-700">
+                  {isolatedUnavailableReason ?? t("instances.instanceModeChecking")}
+                </span>
+              )}
             </button>
           );
         })}
@@ -567,6 +594,43 @@ const CreateInstancePage: React.FC = () => {
     }
     return rawError || t("instances.createFailed");
   };
+
+  const instanceModeLabel = (mode: InstanceMode) => {
+    if (mode === "isolated") return t("instances.instanceModeIsolated");
+    return mode === "pro" ? t("instances.instanceModePro") : t("instances.instanceModeLite");
+  };
+
+  useEffect(() => {
+    const loadRuntimeCapabilities = async () => {
+      try {
+        setRuntimeCapabilities(await instanceService.getRuntimeCapabilities());
+      } catch {
+        setRuntimeCapabilities({
+          checked_at: new Date().toISOString(),
+          instance_modes: {
+            lite: { available: true },
+            isolated: {
+              available: false,
+              reason: t("instances.instanceModeCapabilityLoadFailed"),
+            },
+            pro: { available: true },
+          },
+        });
+      }
+    };
+
+    loadRuntimeCapabilities();
+  }, [t]);
+
+  useEffect(() => {
+    if (selectedMode === "isolated" && isolatedCapability?.available === false) {
+      setFormData((current) => ({
+        ...current,
+        mode: "lite",
+        instance_mode: "lite",
+      }));
+    }
+  }, [isolatedCapability?.available, selectedMode]);
 
   useEffect(() => {
     const loadAvailableTypes = async () => {
@@ -904,7 +968,7 @@ const CreateInstancePage: React.FC = () => {
   };
 
   const canProceed = () => {
-    if (step === 1) return formData.name.length >= 3;
+    if (step === 1) return formData.name.length >= 3 && !(selectedMode === "isolated" && isolatedCapability?.available === false);
     if (step === 2) return availableTypes.length > 0;
     return true;
   };
@@ -2272,7 +2336,7 @@ const CreateInstancePage: React.FC = () => {
                         {t("instances.instanceMode")}
                       </dt>
                       <dd className="mt-1 text-sm text-gray-900">
-                        {selectedMode === "lite" ? "Lite" : "Pro"}
+                        {instanceModeLabel(selectedMode)}
                       </dd>
                     </div>
                     <div>

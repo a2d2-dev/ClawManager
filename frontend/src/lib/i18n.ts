@@ -1738,10 +1738,29 @@ export const translations: Record<Locale, TranslationTree> = {
       descriptionOptional: "Description (optional)",
       descriptionPlaceholder: "Brief description of this instance...",
       instanceMode: "Instance Mode",
+      instanceModeLite: "Lite",
+      instanceModeIsolated: "Isolated Gateway",
+      instanceModePro: "Pro",
+      instanceModePrefix: "Mode {mode}",
       instanceModeLiteDescription:
         "Shared gateway runtime with fast startup and lower resource use.",
+      instanceModeIsolatedDescription:
+        "Dedicated headless gateway runtime gated by the agent-sandbox Sandbox CRD.",
+      instanceModeIsolatedUnavailable:
+        "Isolated Gateway is unavailable on this cluster.",
+      instanceModeChecking: "Checking cluster capability...",
+      instanceModeCapabilityLoadFailed:
+        "Failed to load cluster capability status.",
       instanceModeProDescription:
         "Dedicated desktop runtime with stronger isolation and full desktop resources.",
+      modeSummaryLite: "Gateway runtime",
+      modeSummaryIsolated: "Gateway isolation",
+      modeSummaryPro: "Desktop deployment",
+      runningCount: "{count} running",
+      allModes: "All modes",
+      allBackends: "All backends",
+      gatewayBinding: "Gateway binding",
+      deploymentBackend: "Deployment",
       selectInstanceType: "Select Instance Type",
       quickConfiguration: "Quick Configuration",
       customConfiguration: "Custom Configuration",
@@ -3064,10 +3083,29 @@ export const translations: Record<Locale, TranslationTree> = {
       descriptionOptional: "描述（可选）",
       descriptionPlaceholder: "简要描述这个实例...",
       instanceMode: "实例模式",
+      instanceModeLite: "Lite",
+      instanceModeIsolated: "独立网关",
+      instanceModePro: "Pro",
+      instanceModePrefix: "模式 {mode}",
       instanceModeLiteDescription:
         "共享 Gateway 运行时，启动更快、资源占用更低。",
+      instanceModeIsolatedDescription:
+        "独享无桌面 Gateway 运行时，需要集群安装 agent-sandbox Sandbox CRD。",
+      instanceModeIsolatedUnavailable:
+        "当前集群不可用独立网关模式。",
+      instanceModeChecking: "正在检查集群能力...",
+      instanceModeCapabilityLoadFailed:
+        "加载集群能力状态失败。",
       instanceModeProDescription:
         "独享 Desktop 运行时，隔离性更强，使用完整桌面资源。",
+      modeSummaryLite: "Gateway 运行时",
+      modeSummaryIsolated: "Gateway 隔离",
+      modeSummaryPro: "桌面部署",
+      runningCount: "{count} 个运行中",
+      allModes: "全部模式",
+      allBackends: "全部后端",
+      gatewayBinding: "Gateway 绑定",
+      deploymentBackend: "Deployment",
       selectInstanceType: "选择实例类型",
       quickConfiguration: "快速配置",
       customConfiguration: "自定义配置",

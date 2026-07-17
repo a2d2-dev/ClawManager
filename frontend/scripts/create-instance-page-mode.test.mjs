@@ -35,8 +35,10 @@ const stepTwo = sectionBetween(
 const stepThree = source.slice(source.indexOf("{/* Step 3: Configuration */}"));
 
 assert(
-  /id:\s*"lite"/.test(source) && /id:\s*"pro"/.test(source),
-  "Create instance page must define Lite and Pro mode options.",
+  /id:\s*"lite"/.test(source) &&
+    /id:\s*"isolated"/.test(source) &&
+    /id:\s*"pro"/.test(source),
+  "Create instance page must define Lite, Isolated, and Pro mode options.",
 );
 assert(
   stepOne.includes("renderInstanceModeSelector()"),
@@ -47,8 +49,8 @@ assert(
   "Lite/Pro selector should not be hidden behind step 2.",
 );
 assert(
-  source.includes('const usesDedicatedResources = selectedMode === "pro";'),
-  "Create page must distinguish Pro-only dedicated resource controls.",
+  source.includes('const usesDedicatedResources = selectedMode !== "lite";'),
+  "Create page must distinguish Lite shared resources from dedicated modes.",
 );
 assert(
   source.includes('const showRuntimeImageSelector = selectedMode === "pro";'),

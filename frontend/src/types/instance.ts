@@ -15,7 +15,7 @@ export interface Instance {
     | "webtop"
     | "hermes";
   runtime_type: "desktop" | "shell" | "gateway";
-  instance_mode: "lite" | "pro";
+  instance_mode: "lite" | "isolated" | "pro";
   status: "creating" | "running" | "stopped" | "error" | "deleting";
   cpu_cores: number;
   memory_gb: number;
@@ -45,8 +45,18 @@ export interface Instance {
 }
 
 export type V2InstanceType = "openclaw" | "hermes";
-export type InstanceMode = "lite" | "pro";
+export type InstanceMode = "lite" | "isolated" | "pro";
 export type InstanceAvailability = "available" | "starting" | "unavailable";
+
+export interface RuntimeModeCapability {
+  available: boolean;
+  reason?: string;
+}
+
+export interface RuntimeCapabilities {
+  instance_modes: Record<InstanceMode, RuntimeModeCapability>;
+  checked_at: string;
+}
 
 export interface InstanceStatus {
   instance_id: number;

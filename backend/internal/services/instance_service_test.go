@@ -1,10 +1,16 @@
 package services
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"clawreef/internal/models"
+	"clawreef/internal/utils"
+
+	"github.com/gin-gonic/gin"
 )
 
 type stubLLMModelRepository struct {
@@ -37,6 +43,107 @@ func (r *stubLLMModelRepository) Save(model *models.LLMModel) error {
 
 func (r *stubLLMModelRepository) Delete(id int) error {
 	return nil
+}
+
+func TestResolveCreateRuntimeTypeRejectsInvalidModeRuntimeCombinations(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		name string
+		req  CreateInstanceRequest
+	}{
+		{name: "lite desktop", req: CreateInstanceRequest{Mode: InstanceModeLite, RuntimeType: RuntimeBackendDesktop}},
+		{name: "lite shell", req: CreateInstanceRequest{Mode: InstanceModeLite, RuntimeType: RuntimeBackendShell}},
+		{name: "pro gateway", req: CreateInstanceRequest{Mode: InstanceModePro, RuntimeType: RuntimeBackendGateway}},
+		{name: "isolated desktop", req: CreateInstanceRequest{Mode: InstanceModeIsolated, RuntimeType: RuntimeBackendDesktop}},
+		{name: "isolated shell", req: CreateInstanceRequest{Mode: InstanceModeIsolated, RuntimeType: RuntimeBackendShell}},
+		{name: "mode instance_mode conflict", req: CreateInstanceRequest{Mode: InstanceModeLite, InstanceMode: InstanceModePro, RuntimeType: RuntimeBackendGateway}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mode, err := resolveCreateInstanceMode(tc.req)
+			if err == nil {
+				_, err = resolveCreateRuntimeType(tc.req, mode)
+			}
+			if err == nil {
+				t.Fatal("expected invalid combination error")
+			}
+			if !strings.HasPrefix(err.Error(), "invalid instance mode/runtime_type combination:") {
+				t.Fatalf("expected stable invalid combination prefix, got %q", err.Error())
+			}
+			assertHandleErrorStatus(t, err, http.StatusBadRequest)
+		})
+	}
+}
+
+func TestResolveCreateModeKeepsLegacyRuntimeTypeDefaultsValid(t *testing.T) {
+	cases := []struct {
+		runtimeType string
+		wantMode    string
+		wantRuntime string
+	}{
+		{runtimeType: RuntimeBackendGateway, wantMode: InstanceModeLite, wantRuntime: RuntimeBackendGateway},
+		{runtimeType: RuntimeBackendDesktop, wantMode: InstanceModePro, wantRuntime: RuntimeBackendDesktop},
+		{runtimeType: RuntimeBackendShell, wantMode: InstanceModePro, wantRuntime: RuntimeBackendShell},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.runtimeType, func(t *testing.T) {
+			req := CreateInstanceRequest{RuntimeType: tc.runtimeType}
+			mode, err := resolveCreateInstanceMode(req)
+			if err != nil {
+				t.Fatalf("resolveCreateInstanceMode returned error: %v", err)
+			}
+			if mode != tc.wantMode {
+				t.Fatalf("mode = %q, want %q", mode, tc.wantMode)
+			}
+			runtimeType, err := resolveCreateRuntimeType(req, mode)
+			if err != nil {
+				t.Fatalf("resolveCreateRuntimeType returned error: %v", err)
+			}
+			if runtimeType != tc.wantRuntime {
+				t.Fatalf("runtimeType = %q, want %q", runtimeType, tc.wantRuntime)
+			}
+		})
+	}
+}
+
+func TestInstanceDispatchRejectsEmptyAndInvalidStoredMode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, tc := range []struct {
+		name         string
+		instanceMode string
+	}{
+		{name: "empty", instanceMode: ""},
+		{name: "invalid", instanceMode: "mini"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			instance := &models.Instance{ID: 77, InstanceMode: tc.instanceMode}
+			service := &instanceService{}
+			_, _, _, err := service.runtimeBackendForInstance(instance)
+			if err == nil {
+				t.Fatal("expected dispatch error")
+			}
+			for _, want := range []string{"instance_id=77", fmt.Sprintf("instance_mode=%q", tc.instanceMode), "repair instance data"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("expected error %q to contain %q", err.Error(), want)
+				}
+			}
+			assertHandleErrorStatus(t, err, http.StatusBadRequest)
+		})
+	}
+}
+
+func assertHandleErrorStatus(t *testing.T, err error, want int) {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	utils.HandleError(c, err)
+	if recorder.Code != want {
+		t.Fatalf("HandleError status = %d, want %d, body = %s", recorder.Code, want, recorder.Body.String())
+	}
 }
 
 func TestBuildGatewayEnvInjectsGatewayModelCatalog(t *testing.T) {
