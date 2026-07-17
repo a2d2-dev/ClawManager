@@ -96,7 +96,7 @@ test.describe("isolated instance gateway access", () => {
       await expect.poll(() => page.locator("body").innerText()).toContain("Mode Isolated");
       await expect.poll(() => page.locator("body").innerText()).toContain("Runtime gateway");
       await expect(page.getByRole("heading", { name: /runtime backend/i })).toBeVisible();
-      await expect(page.getByText(/Sandbox .*\/.+/)).toBeVisible();
+      await expect(page.getByRole("main").getByText(/Sandbox .*\/.+/)).toBeVisible();
       await expect(page.locator("iframe")).toHaveCount(0);
       await expect(page.getByTitle(/fullscreen/i)).toHaveCount(0);
       await expect(page.getByText(/desktop stream/i)).toHaveCount(0);
