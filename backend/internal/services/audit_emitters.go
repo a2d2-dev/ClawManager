@@ -1,6 +1,7 @@
 package services
 
 import (
+	"log"
 	"strings"
 
 	"clawreef/internal/models"
@@ -112,7 +113,9 @@ func emitAudit(logger AuditLogger, event AuditLogEvent) {
 	if logger == nil {
 		return
 	}
-	_ = logger.Emit(event)
+	if err := logger.Emit(event); err != nil {
+		log.Printf("failed to emit audit event %q: %v", event.Event, err)
+	}
 }
 
 func auditInstanceContext(instance *models.Instance) map[string]interface{} {

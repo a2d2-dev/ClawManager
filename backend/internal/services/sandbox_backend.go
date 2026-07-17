@@ -406,11 +406,7 @@ func (b *sandboxBackend) Status(ctx context.Context, instance *models.Instance) 
 	latestCondition, hasLatestCondition := latestSandboxCondition(sandbox)
 	state := sandboxStateFromCondition(latestCondition, hasLatestCondition)
 	if hasLatestCondition {
-		var emitErr error
-		sandbox, emitErr = b.emitSandboxConditionTransition(ctx, sandbox, instance, latestCondition)
-		if emitErr != nil {
-			return nil, emitErr
-		}
+		sandbox = b.emitSandboxConditionTransition(ctx, sandbox, instance, latestCondition)
 	}
 	if state.Recreate {
 		decision, err := b.recoverFailedSandbox(ctx, sandbox, instance)
@@ -1211,18 +1207,18 @@ func sandboxStateFromCondition(condition sandboxCondition, ok bool) sandboxCondi
 	return sandboxConditionState{Status: "creating", PodStatus: podStatus, Reason: condition.Reason}
 }
 
-func (b *sandboxBackend) emitSandboxConditionTransition(ctx context.Context, sandbox *unstructured.Unstructured, instance *models.Instance, condition sandboxCondition) (*unstructured.Unstructured, error) {
+func (b *sandboxBackend) emitSandboxConditionTransition(ctx context.Context, sandbox *unstructured.Unstructured, instance *models.Instance, condition sandboxCondition) *unstructured.Unstructured {
 	eventName, outcome, ok := sandboxAuditEventForCondition(condition)
 	if !ok || sandbox == nil || instance == nil {
-		return sandbox, nil
+		return sandbox
 	}
 	if b == nil || b.service == nil || !auditLoggerEnabled(b.service.auditLogger) {
-		return sandbox, nil
+		return sandbox
 	}
 	signature := sandboxConditionAuditSignature(condition)
 	annotations := cloneStringMap(sandbox.GetAnnotations())
 	if annotations[sandboxAuditLastConditionAnnotation] == signature {
-		return sandbox, nil
+		return sandbox
 	}
 
 	next := sandbox.DeepCopy()
@@ -1230,14 +1226,18 @@ func (b *sandboxBackend) emitSandboxConditionTransition(ctx context.Context, san
 	next.SetAnnotations(annotations)
 	updated, err := b.sandboxes(next.GetNamespace()).Update(ctx, next, metav1.UpdateOptions{})
 	if err != nil {
-		return sandbox, fmt.Errorf("failed to persist isolated Sandbox audit condition transition: %w", err)
+		log.Printf("failed to persist isolated Sandbox audit condition transition for %s/%s: %v", next.GetNamespace(), next.GetName(), err)
+		return sandbox
 	}
 
+	// Dedup is persisted before emitting the audit event, so v1 accepts
+	// at-most-once semantics: a crash or emit failure can lose one event, but
+	// cannot duplicate it.
 	// v1 intentionally detects transitions only when Status observes the current
 	// latest condition; transitions that happen entirely between observations can
 	// be missed.
 	b.emitSandboxConditionEvent(instance, eventName, outcome, condition)
-	return updated, nil
+	return updated
 }
 
 func auditLoggerEnabled(logger AuditLogger) bool {

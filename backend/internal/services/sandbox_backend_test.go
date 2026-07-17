@@ -17,9 +17,11 @@ import (
 	"clawreef/internal/services/k8s"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	kruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -604,6 +606,56 @@ func TestSandboxBackendStatusAuditIgnoresStaleConditionAndDedupesRepeatObservati
 		t.Fatalf("audit event sequence = %s, want %s", got, AuditEventSandboxReady)
 	}
 	assertAuditEvent(t, events[0], AuditEventSandboxReady, InstanceModeIsolated, "DependenciesReady")
+}
+
+func TestSandboxBackendStatusAuditRetriesAfterAnnotationUpdateConflict(t *testing.T) {
+	instance := sandboxTestInstance(190, "creating")
+	conditions := []any{
+		map[string]any{"type": "Ready", "status": "True", "reason": "DependenciesReady", "observedGeneration": int64(4), "lastTransitionTime": "2026-07-17T03:02:00Z"},
+	}
+	sandbox := sandboxObjectForTest(instance, conditions)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	updateAttempts := 0
+	dynamicClient.PrependReactor("update", "sandboxes", func(action k8stesting.Action) (bool, kruntime.Object, error) {
+		updateAttempts++
+		if updateAttempts == 1 {
+			return true, nil, apierrors.NewConflict(schema.GroupResource{Group: AgentSandboxGroup, Resource: "sandboxes"}, sandbox.GetName(), errors.New("stale resource version"))
+		}
+		return false, nil, nil
+	})
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+	var sink bytes.Buffer
+	backend.service.auditLogger = NewJSONLAuditLogger(&sink, true)
+
+	status, err := backend.Status(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("first Status returned error: %v", err)
+	}
+	if status.Status != "running" {
+		t.Fatalf("first status = %q, want running", status.Status)
+	}
+	if events := auditEventsFromSink(t, &sink); len(events) != 0 {
+		t.Fatalf("first Status emitted audit events = %#v, want none", events)
+	}
+
+	status, err = backend.Status(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("retry Status returned error: %v", err)
+	}
+	if status.Status != "running" {
+		t.Fatalf("retry status = %q, want running", status.Status)
+	}
+	events := auditEventsFromSink(t, &sink)
+	t.Logf("audit event sequence after retry: %s", auditEventSequence(events))
+	if got := auditEventSequence(events); got != AuditEventSandboxReady {
+		t.Fatalf("audit event sequence = %s, want %s", got, AuditEventSandboxReady)
+	}
+	assertAuditEvent(t, events[0], AuditEventSandboxReady, InstanceModeIsolated, "DependenciesReady")
+	if updateAttempts != 2 {
+		t.Fatalf("update attempts = %d, want first conflict then retry success", updateAttempts)
+	}
 }
 
 func TestSandboxBackendStatusAuditEmitsReadyThenFinishedTransitions(t *testing.T) {
