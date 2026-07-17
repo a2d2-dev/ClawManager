@@ -293,6 +293,61 @@ func TestBuildLiteBatchCreateRequestsDefaultsToGatewayLite(t *testing.T) {
 	}
 }
 
+func TestCreateInstanceRejectsPublicPlacement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/instances", strings.NewReader(`{
+		"name":"isolated-dev",
+		"type":"openclaw",
+		"mode":"isolated",
+		"runtime_type":"gateway",
+		"cpu_cores":2,
+		"memory_gb":4,
+		"disk_gb":20,
+		"os_type":"openclaw",
+		"os_version":"latest",
+		"placement":{"runtimeClassName":"kata"}
+	}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("userID", 7)
+
+	handler := &InstanceHandler{}
+	handler.CreateInstance(c)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body = %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "placement is not supported in public instance requests") {
+		t.Fatalf("response did not explain placement rejection: %s", recorder.Body.String())
+	}
+}
+
+func TestUpdateInstanceRejectsPublicPlacement(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Params = gin.Params{{Key: "id", Value: "42"}}
+	c.Request = httptest.NewRequest(http.MethodPatch, "/api/v1/instances/42", strings.NewReader(`{"placement":{"runtimeClassName":"kata"}}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("userID", 7)
+	c.Set("userRole", "user")
+
+	handler := &InstanceHandler{
+		instanceService: &fakeWorkspaceHandlerInstanceService{instances: map[int]*models.Instance{
+			42: {ID: 42, UserID: 7, Name: "isolated-dev"},
+		}},
+	}
+	handler.UpdateInstance(c)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body = %s", recorder.Code, http.StatusBadRequest, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "placement is not supported in public instance requests") {
+		t.Fatalf("response did not explain placement rejection: %s", recorder.Body.String())
+	}
+}
+
 func TestBatchDeleteLiteInstancesRejectsProInstance(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -164,6 +166,33 @@ func (h *InstanceHandler) Shutdown() {
 	}
 }
 
+func bindPublicInstanceJSON(c *gin.Context, dest interface{}) bool {
+	raw, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, "invalid request body")
+		return false
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(raw))
+	if publicInstancePayloadHasPlacement(raw) {
+		utils.Error(c, http.StatusBadRequest, "placement is not supported in public instance requests")
+		return false
+	}
+	if err := c.ShouldBindJSON(dest); err != nil {
+		utils.ValidationError(c, err)
+		return false
+	}
+	return true
+}
+
+func publicInstancePayloadHasPlacement(raw []byte) bool {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false
+	}
+	_, exists := payload["placement"]
+	return exists
+}
+
 type InstanceRuntimeDetailsResponse struct {
 	Runtime  *services.InstanceRuntimeStatusPayload `json:"runtime,omitempty"`
 	Agent    *services.InstanceAgentPayload         `json:"agent,omitempty"`
@@ -204,7 +233,6 @@ type CreateInstanceRequest struct {
 	ImageTag             *string                      `json:"image_tag,omitempty"`
 	EnvironmentOverrides map[string]string            `json:"environment_overrides,omitempty"`
 	StorageClass         string                       `json:"storage_class"`
-	Placement            *services.RuntimePlacement   `json:"placement,omitempty"`
 	OpenClawConfigPlan   *services.OpenClawConfigPlan `json:"openclaw_config_plan,omitempty"`
 	SkillIDs             []int                        `json:"skill_ids,omitempty"`
 }
@@ -350,8 +378,7 @@ func (h *InstanceHandler) CreateInstance(c *gin.Context) {
 	userID, _ := c.Get("userID")
 
 	var req CreateInstanceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.ValidationError(c, err)
+	if !bindPublicInstanceJSON(c, &req) {
 		return
 	}
 
@@ -399,7 +426,6 @@ func instanceCreateRequestToService(req CreateInstanceRequest) services.CreateIn
 		ImageTag:             req.ImageTag,
 		EnvironmentOverrides: req.EnvironmentOverrides,
 		StorageClass:         req.StorageClass,
-		Placement:            req.Placement,
 		OpenClawConfigPlan:   req.OpenClawConfigPlan,
 	}
 }
@@ -738,8 +764,7 @@ func (h *InstanceHandler) UpdateInstance(c *gin.Context) {
 	}
 
 	var req UpdateInstanceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.ValidationError(c, err)
+	if !bindPublicInstanceJSON(c, &req) {
 		return
 	}
 

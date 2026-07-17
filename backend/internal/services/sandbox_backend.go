@@ -667,8 +667,14 @@ func (b *sandboxBackend) recoverFailedSandbox(ctx context.Context, existing *uns
 	name := existing.GetName()
 	now := time.Now().UTC()
 	annotations := cloneStringMap(existing.GetAnnotations())
-	attempts, _ := strconv.Atoi(strings.TrimSpace(annotations[sandboxRecreateAttemptsAnnotation]))
-	lastAttempt := parseSandboxRecreateAttemptTime(annotations[sandboxRecreateLastAttemptAnnotation])
+	attempts, decision, ok := parseSandboxRecreateAttemptsAnnotation(namespace, name, annotations)
+	if !ok {
+		return decision, nil
+	}
+	lastAttempt, decision, ok := parseSandboxRecreateLastAttemptAnnotation(namespace, name, annotations)
+	if !ok {
+		return decision, nil
+	}
 
 	if attempts >= sandboxRecreateMaxAttempts {
 		message := fmt.Sprintf("isolated Sandbox recovery stopped after %d failed recreate attempts", attempts)
@@ -720,9 +726,36 @@ func (b *sandboxBackend) recoverFailedSandbox(ctx context.Context, existing *uns
 	return sandboxRecoveryDecision{Status: "creating", PodStatus: "recreating"}, nil
 }
 
-func parseSandboxRecreateAttemptTime(raw string) time.Time {
-	parsed, _ := time.Parse(time.RFC3339, strings.TrimSpace(raw))
-	return parsed
+func parseSandboxRecreateAttemptsAnnotation(namespace, name string, annotations map[string]string) (int, sandboxRecoveryDecision, bool) {
+	raw, exists := annotations[sandboxRecreateAttemptsAnnotation]
+	if !exists {
+		return 0, sandboxRecoveryDecision{}, true
+	}
+	attempts, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		decision := malformedSandboxRecreateAnnotationDecision(namespace, name, sandboxRecreateAttemptsAnnotation, raw, err)
+		return 0, decision, false
+	}
+	return attempts, sandboxRecoveryDecision{}, true
+}
+
+func parseSandboxRecreateLastAttemptAnnotation(namespace, name string, annotations map[string]string) (time.Time, sandboxRecoveryDecision, bool) {
+	raw, exists := annotations[sandboxRecreateLastAttemptAnnotation]
+	if !exists {
+		return time.Time{}, sandboxRecoveryDecision{}, true
+	}
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		decision := malformedSandboxRecreateAnnotationDecision(namespace, name, sandboxRecreateLastAttemptAnnotation, raw, err)
+		return time.Time{}, decision, false
+	}
+	return parsed, sandboxRecoveryDecision{}, true
+}
+
+func malformedSandboxRecreateAnnotationDecision(namespace, name, key, raw string, err error) sandboxRecoveryDecision {
+	message := fmt.Sprintf("isolated Sandbox recovery stopped because annotation %s is malformed: %v", key, err)
+	log.Printf("isolated Sandbox recovery stopped for %s/%s because annotation %s is malformed (value=%q): %v", namespace, name, key, raw, err)
+	return sandboxRecoveryDecision{Status: "error", PodStatus: "recreate_limit_exceeded", ErrorMessage: &message}
 }
 
 func (b *sandboxBackend) waitSandboxPodDeleted(ctx context.Context, namespace, name string) error {

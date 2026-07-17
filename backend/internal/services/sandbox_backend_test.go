@@ -1,8 +1,10 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -634,6 +636,69 @@ func TestSandboxBackendStatusRecoversPodFailedSandboxBySuspendedRunningFlip(t *t
 	env := envMapFromContainer(t, containers[0].(map[string]interface{}))
 	if env["HTTP_PROXY"] != "http://proxy.good:3128" || env["CLAWMANAGER_AGENT_ENABLED"] != "true" {
 		t.Fatalf("recovery must refresh pod env before resume, got %#v", env)
+	}
+}
+
+func TestSandboxBackendStatusFailClosedOnMalformedRecoveryAnnotations(t *testing.T) {
+	tests := []struct {
+		name           string
+		annotations    map[string]string
+		wantLogSnippet string
+	}{
+		{
+			name: "attempt count",
+			annotations: map[string]string{
+				sandboxRecreateAttemptsAnnotation: "not-a-number",
+			},
+			wantLogSnippet: sandboxRecreateAttemptsAnnotation,
+		},
+		{
+			name: "last attempt time",
+			annotations: map[string]string{
+				sandboxRecreateAttemptsAnnotation:    "1",
+				sandboxRecreateLastAttemptAnnotation: "not-a-timestamp",
+			},
+			wantLogSnippet: sandboxRecreateLastAttemptAnnotation,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var logBuffer bytes.Buffer
+			previousLogOutput := log.Writer()
+			log.SetOutput(&logBuffer)
+			defer log.SetOutput(previousLogOutput)
+
+			instance := sandboxTestInstance(190, "running")
+			conditions := []any{
+				map[string]any{"type": "Finished", "status": "True", "reason": "PodFailed", "observedGeneration": int64(3)},
+			}
+			sandbox := sandboxObjectForTest(instance, conditions)
+			sandbox.SetAnnotations(tt.annotations)
+			instanceRepo := newV2LifecycleInstanceRepo()
+			instanceRepo.byID[instance.ID] = instance
+			dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+			backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+
+			status, err := backend.Status(context.Background(), instance)
+			if err != nil {
+				t.Fatalf("Status returned error: %v", err)
+			}
+			if status.Status != "error" || status.PodStatus != "recreate_limit_exceeded" {
+				t.Fatalf("status for malformed annotation = %#v, want error/recreate_limit_exceeded", status)
+			}
+			stored := instanceRepo.byID[instance.ID]
+			if stored.Status != "error" || stored.RuntimeErrorMessage == nil || !strings.Contains(*stored.RuntimeErrorMessage, tt.wantLogSnippet) {
+				t.Fatalf("stored instance after malformed annotation = %#v", stored)
+			}
+			logOutput := logBuffer.String()
+			if !strings.Contains(logOutput, tt.wantLogSnippet) || !strings.Contains(logOutput, "malformed") {
+				t.Fatalf("log output = %q, want malformed annotation %q", logOutput, tt.wantLogSnippet)
+			}
+			assertNoAction(t, dynamicClient, "update")
+			assertNoAction(t, dynamicClient, "delete")
+			assertNoAction(t, dynamicClient, "create")
+		})
 	}
 }
 
