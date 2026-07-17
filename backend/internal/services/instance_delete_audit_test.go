@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -61,7 +62,7 @@ func TestInstanceServiceDeleteProEmitsNoSuccessUntilCompleteDeletionFinishes(t *
 	}
 }
 
-func TestProCompleteDeletionFailureEmitsFailedAuditWithErrorDetail(t *testing.T) {
+func TestProCompleteDeletionFailureEmitsFailedAuditWithErrorCode(t *testing.T) {
 	previousCleaner := newInstanceResourceCleaner
 	newInstanceResourceCleaner = func() instanceResourceCleaner { return stubInstanceResourceCleaner{} }
 	t.Cleanup(func() {
@@ -92,9 +93,15 @@ func TestProCompleteDeletionFailureEmitsFailedAuditWithErrorDetail(t *testing.T)
 	if event.Context["error_code"] != "backend_error" {
 		t.Fatalf("error_code = %v, want backend_error", event.Context["error_code"])
 	}
-	errorText, _ := event.Context["error"].(string)
-	if !strings.Contains(errorText, "delete store unavailable") {
-		t.Fatalf("error text = %q, want delete failure detail", errorText)
+	if _, ok := event.Context["error"]; ok {
+		t.Fatalf("unexpected raw error context in audit event: %#v", event.Context["error"])
+	}
+	var line bytes.Buffer
+	if err := NewJSONLAuditLogger(&line, true).Emit(event); err != nil {
+		t.Fatalf("emit audit JSONL: %v", err)
+	}
+	if strings.Contains(line.String(), "delete store unavailable") {
+		t.Fatalf("audit JSONL line leaked raw error text: %s", line.String())
 	}
 	if auditLogger.HasEvent(AuditEventInstanceDelete, AuditOutcomeSuccess) {
 		t.Fatalf("failed completeDeletion also emitted success: %#v", auditLogger.Events())
