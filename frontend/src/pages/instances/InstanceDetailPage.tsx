@@ -957,7 +957,7 @@ const InstanceDetailPage: React.FC = () => {
     </div>
   );
 
-  const shareLinkControl = instance.runtime_type.toLowerCase() !== "shell" && (
+  const shareLinkControl = !isIsolatedInstance && instance.runtime_type.toLowerCase() !== "shell" && (
     <div className="relative">
       <button
         type="button"

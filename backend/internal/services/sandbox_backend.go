@@ -422,6 +422,41 @@ func (b *sandboxBackend) Status(ctx context.Context, instance *models.Instance) 
 		return nil, err
 	}
 
+	return b.instanceStatusFromSandbox(instance, sandbox, state), nil
+}
+
+func (b *sandboxBackend) ObserveStatus(ctx context.Context, instance *models.Instance) (*InstanceStatus, error) {
+	if err := b.ensureAvailable(); err != nil {
+		return nil, err
+	}
+	sandbox, err := b.getSandbox(ctx, instance)
+	if apierrors.IsNotFound(err) {
+		if syncErr := b.markInstanceStopped(instance); syncErr != nil {
+			return nil, syncErr
+		}
+		stopped := "stopped"
+		return &InstanceStatus{
+			InstanceID:   instance.ID,
+			Status:       stopped,
+			CreatedAt:    instance.CreatedAt,
+			StartedAt:    instance.StartedAt,
+			PodName:      instance.PodName,
+			PodNamespace: instance.PodNamespace,
+		}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	latestCondition, hasLatestCondition := latestSandboxCondition(sandbox)
+	state := sandboxStateFromCondition(latestCondition, hasLatestCondition)
+	state.Recreate = false
+	if err := b.syncInstanceStatus(instance, state); err != nil {
+		return nil, err
+	}
+	return b.instanceStatusFromSandbox(instance, sandbox, state), nil
+}
+
+func (b *sandboxBackend) instanceStatusFromSandbox(instance *models.Instance, sandbox *unstructured.Unstructured, state sandboxConditionState) *InstanceStatus {
 	podIP := firstSandboxPodIP(sandbox)
 	return &InstanceStatus{
 		InstanceID:   instance.ID,
@@ -432,7 +467,7 @@ func (b *sandboxBackend) Status(ctx context.Context, instance *models.Instance) 
 		PodStatus:    state.PodStatus,
 		CreatedAt:    instance.CreatedAt,
 		StartedAt:    instance.StartedAt,
-	}, nil
+	}
 }
 
 func (b *sandboxBackend) Endpoint(ctx context.Context, instance *models.Instance) (*RuntimeEndpoint, error) {
@@ -1027,7 +1062,7 @@ func isolatedGatewayCommand(instanceType string) []string {
 	if strings.EqualFold(instanceType, RuntimeTypeHermes) {
 		return []string{"/bin/sh", "-lc", "mkdir -p /workspaces /config/.hermes && exec /usr/local/bin/start-hermes-dashboard-gateway"}
 	}
-	return []string{"/bin/sh", "-lc", "mkdir -p /workspaces /config/.openclaw && exec /usr/local/bin/openclaw gateway run --allow-unconfigured --auth token --token \"${CLAWMANAGER_INSTANCE_TOKEN}\" --bind lan --port 19090 --force --dev --verbose"}
+	return []string{"/bin/sh", "-lc", fmt.Sprintf("mkdir -p /workspaces /config/.openclaw && exec /usr/local/bin/openclaw gateway run --allow-unconfigured --auth token --token \"${CLAWMANAGER_INSTANCE_TOKEN}\" --bind lan --port %d --force --dev --verbose", isolatedGatewayPort)}
 }
 
 func isolatedGatewayImage(instanceType string) string {

@@ -1,3 +1,5 @@
+import type { APIRequestContext } from "@playwright/test";
+
 import { expect, test } from "../../fixtures/test.js";
 import { env } from "../../fixtures/env.js";
 import {
@@ -20,6 +22,29 @@ function backendOrigin() {
 
 function backendURL(pathOrURL: string) {
   return new URL(pathOrURL, backendOrigin()).toString();
+}
+
+function proxyURL(pathOrURL: string, path = "/") {
+  const url = new URL(backendURL(pathOrURL));
+  if (!url.pathname.endsWith("/")) {
+    url.pathname += "/";
+  }
+  if (path !== "/") {
+    url.pathname += path.replace(/^\/+/, "");
+  }
+  return url.toString();
+}
+
+async function gatewayHealth(request: APIRequestContext, instanceId: number, accessURL: string, token: string) {
+  const response = await request.get(proxyURL(accessURL, "/health"), {
+    headers: { Cookie: `instance_access_${instanceId}=${token}` },
+    timeout: 30_000
+  });
+  const body = await response.text();
+  return {
+    status: response.status(),
+    body
+  };
 }
 
 test.describe("isolated instance gateway access", () => {
@@ -75,23 +100,23 @@ test.describe("isolated instance gateway access", () => {
       await expect(page.locator("iframe")).toHaveCount(0);
       await expect(page.getByTitle(/fullscreen/i)).toHaveCount(0);
       await expect(page.getByText(/desktop stream/i)).toHaveCount(0);
+      await expect(page.getByRole("button", { name: /share link/i })).toHaveCount(0);
+      await expect(page.locator("[data-share-enabled]")).toHaveCount(0);
 
       const access = await generateInstanceAccessToken(request, tokens.access_token, instanceId);
       expect(access.token).toBeTruthy();
       expect(access.access_url || access.proxy_url).toContain(`/api/v1/instances/${instanceId}/proxy`);
+      const accessURL = access.access_url || access.proxy_url;
 
       await expect
         .poll(
           async () => {
-            const response = await request.get(backendURL(access.access_url || access.proxy_url), {
-              headers: { Cookie: `instance_access_${instanceId}=${access.token}` },
-              timeout: 30_000
-            });
-            return response.status();
+            const health = await gatewayHealth(request, instanceId!, accessURL, access.token);
+            return health.status < 400 && /"ok"\s*:\s*true/.test(health.body) && /"status"\s*:\s*"live"/.test(health.body);
           },
           { timeout: 120_000, intervals: [2_000, 5_000, 10_000] }
         )
-        .toBeLessThan(400);
+        .toBe(true);
 
       await stopInstance(request, tokens.access_token, instanceId);
       await expect
@@ -113,6 +138,16 @@ test.describe("isolated instance gateway access", () => {
       expect(afterRestart.instance_mode).toBe("isolated");
       expect(afterRestart.runtime_type).toBe("gateway");
       expect(afterRestart.workspace_path).toBe(originalWorkspacePath);
+
+      await expect
+        .poll(
+          async () => {
+            const health = await gatewayHealth(request, instanceId!, accessURL, access.token);
+            return health.status < 400 && /"ok"\s*:\s*true/.test(health.body) && /"status"\s*:\s*"live"/.test(health.body);
+          },
+          { timeout: 120_000, intervals: [2_000, 5_000, 10_000] }
+        )
+        .toBe(true);
     } finally {
       if (instanceId !== null) {
         await deleteInstance(request, tokens.access_token, instanceId).catch(() => undefined);

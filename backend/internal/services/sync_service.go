@@ -12,6 +12,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/dynamic"
 )
 
 // SyncService handles synchronization between database and K8s state
@@ -21,6 +22,7 @@ type SyncService struct {
 	podService           *k8s.PodService
 	deploymentService    *k8s.InstanceDeploymentService
 	runtimeCapabilities  RuntimeCapabilities
+	sandboxDynamicClient dynamic.Interface
 	interval             time.Duration
 
 	mu       sync.Mutex
@@ -33,6 +35,12 @@ type SyncServiceOption func(*SyncService)
 func WithSyncRuntimeCapabilities(capabilities RuntimeCapabilities) SyncServiceOption {
 	return func(s *SyncService) {
 		s.runtimeCapabilities = normalizeRuntimeCapabilities(capabilities)
+	}
+}
+
+func WithSyncSandboxDynamicClient(dynamicClient dynamic.Interface) SyncServiceOption {
+	return func(s *SyncService) {
+		s.sandboxDynamicClient = dynamicClient
 	}
 }
 
@@ -254,7 +262,10 @@ func (s *SyncService) syncIsolatedInstance(ctx context.Context, instance *models
 		instanceRepo:        s.instanceRepo,
 		runtimeCapabilities: s.runtimeCapabilities,
 	})
-	status, err := backend.Status(ctx, instance)
+	if s.sandboxDynamicClient != nil {
+		backend.dynamicClient = s.sandboxDynamicClient
+	}
+	status, err := backend.ObserveStatus(ctx, instance)
 	if err != nil {
 		fmt.Printf("Instance %d: failed to sync isolated Sandbox status: %v\n", instance.ID, err)
 		return
