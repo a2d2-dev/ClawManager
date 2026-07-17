@@ -39,6 +39,7 @@ const (
 
 	sandboxRecreateAttemptsAnnotation    = "clawmanager.io/recreate-attempts"
 	sandboxRecreateLastAttemptAnnotation = "clawmanager.io/recreate-last-attempt"
+	sandboxAuditLastConditionAnnotation  = "clawmanager.io/audit-last-condition"
 	sandboxRecreateMaxAttempts           = 3
 	sandboxRecreateCooldown              = 5 * time.Minute
 )
@@ -402,7 +403,11 @@ func (b *sandboxBackend) Status(ctx context.Context, instance *models.Instance) 
 	if err != nil {
 		return nil, err
 	}
-	state := sandboxStateFromConditions(sandbox)
+	latestCondition, hasLatestCondition := latestSandboxCondition(sandbox)
+	state := sandboxStateFromCondition(latestCondition, hasLatestCondition)
+	if hasLatestCondition {
+		sandbox = b.emitSandboxConditionTransition(ctx, sandbox, instance, latestCondition)
+	}
 	if state.Recreate {
 		decision, err := b.recoverFailedSandbox(ctx, sandbox, instance)
 		if err != nil {
@@ -723,6 +728,7 @@ func (b *sandboxBackend) recoverFailedSandbox(ctx context.Context, existing *uns
 	if _, err := b.sandboxes(namespace).Update(ctx, running, metav1.UpdateOptions{}); err != nil {
 		return sandboxRecoveryDecision{}, fmt.Errorf("failed to resume failed isolated Sandbox %s/%s: %w", namespace, name, err)
 	}
+	b.emitSandboxRecreated(instance, attempts+1)
 	return sandboxRecoveryDecision{Status: "creating", PodStatus: "recreating"}, nil
 }
 
@@ -1169,6 +1175,10 @@ func normalizedGatewayContainerName(instanceType string) string {
 
 func sandboxStateFromConditions(sandbox *unstructured.Unstructured) sandboxConditionState {
 	condition, ok := latestSandboxCondition(sandbox)
+	return sandboxStateFromCondition(condition, ok)
+}
+
+func sandboxStateFromCondition(condition sandboxCondition, ok bool) sandboxConditionState {
 	if !ok {
 		return sandboxConditionState{Status: "creating", PodStatus: "pending"}
 	}
@@ -1195,6 +1205,128 @@ func sandboxStateFromConditions(sandbox *unstructured.Unstructured) sandboxCondi
 		}
 	}
 	return sandboxConditionState{Status: "creating", PodStatus: podStatus, Reason: condition.Reason}
+}
+
+func (b *sandboxBackend) emitSandboxConditionTransition(ctx context.Context, sandbox *unstructured.Unstructured, instance *models.Instance, condition sandboxCondition) *unstructured.Unstructured {
+	eventName, outcome, ok := sandboxAuditEventForCondition(condition)
+	if !ok || sandbox == nil || instance == nil {
+		return sandbox
+	}
+	if b == nil || b.service == nil || !auditLoggerEnabled(b.service.auditLogger) {
+		return sandbox
+	}
+	signature := sandboxConditionAuditSignature(condition)
+	annotations := cloneStringMap(sandbox.GetAnnotations())
+	if annotations[sandboxAuditLastConditionAnnotation] == signature {
+		return sandbox
+	}
+
+	next := sandbox.DeepCopy()
+	annotations[sandboxAuditLastConditionAnnotation] = signature
+	next.SetAnnotations(annotations)
+	updated, err := b.sandboxes(next.GetNamespace()).Update(ctx, next, metav1.UpdateOptions{})
+	if err != nil {
+		log.Printf("failed to persist isolated Sandbox audit condition transition for %s/%s: %v", next.GetNamespace(), next.GetName(), err)
+		return sandbox
+	}
+
+	// Dedup is persisted before emitting the audit event, so v1 accepts
+	// at-most-once semantics: a crash or emit failure can lose one event, but
+	// cannot duplicate it.
+	// v1 intentionally detects transitions only when Status observes the current
+	// latest condition; transitions that happen entirely between observations can
+	// be missed.
+	b.emitSandboxConditionEvent(instance, eventName, outcome, condition)
+	return updated
+}
+
+func auditLoggerEnabled(logger AuditLogger) bool {
+	switch typed := logger.(type) {
+	case nil:
+		return false
+	case noopAuditLogger:
+		return false
+	case *jsonlAuditLogger:
+		return typed != nil && typed.enabled
+	default:
+		return true
+	}
+}
+
+func sandboxAuditEventForCondition(condition sandboxCondition) (string, string, bool) {
+	if !strings.EqualFold(condition.Status, "True") {
+		return "", "", false
+	}
+	switch condition.Type {
+	case "Ready":
+		return AuditEventSandboxReady, AuditOutcomeSuccess, true
+	case "Finished":
+		return AuditEventSandboxFinished, sandboxFinishedOutcome(condition.Reason), true
+	default:
+		return "", "", false
+	}
+}
+
+func sandboxFinishedOutcome(reason string) string {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "podsucceeded", "succeeded", "completed":
+		return AuditOutcomeSuccess
+	default:
+		return AuditOutcomeFailed
+	}
+}
+
+func sandboxConditionAuditSignature(condition sandboxCondition) string {
+	transition := ""
+	if !condition.LastTransitionTime.IsZero() {
+		transition = condition.LastTransitionTime.UTC().Format(time.RFC3339Nano)
+	}
+	return strings.Join([]string{
+		condition.Type,
+		condition.Status,
+		condition.Reason,
+		strconv.FormatInt(condition.ObservedGeneration, 10),
+		transition,
+	}, "|")
+}
+
+func (b *sandboxBackend) emitSandboxConditionEvent(instance *models.Instance, eventName, outcome string, condition sandboxCondition) {
+	if b == nil || b.service == nil || instance == nil {
+		return
+	}
+	context := auditInstanceContext(instance)
+	context["condition_type"] = condition.Type
+	context["condition_status"] = condition.Status
+	context["condition_reason"] = condition.Reason
+	context["condition_observed_generation"] = condition.ObservedGeneration
+	if !condition.LastTransitionTime.IsZero() {
+		context["condition_last_transition_time"] = condition.LastTransitionTime.UTC().Format(time.RFC3339Nano)
+	}
+	emitAudit(b.service.auditLogger, AuditLogEvent{
+		Event:        eventName,
+		InstanceMode: InstanceModeIsolated,
+		InstanceID:   auditIntPtr(instance.ID),
+		UserID:       auditIntPtr(instance.UserID),
+		Outcome:      outcome,
+		Context:      context,
+	})
+}
+
+func (b *sandboxBackend) emitSandboxRecreated(instance *models.Instance, attemptCount int) {
+	if b == nil || b.service == nil || instance == nil {
+		return
+	}
+	context := auditInstanceContext(instance)
+	context["attempt_count"] = attemptCount
+	context["max_attempts"] = sandboxRecreateMaxAttempts
+	emitAudit(b.service.auditLogger, AuditLogEvent{
+		Event:        AuditEventSandboxRecreated,
+		InstanceMode: InstanceModeIsolated,
+		InstanceID:   auditIntPtr(instance.ID),
+		UserID:       auditIntPtr(instance.UserID),
+		Outcome:      AuditOutcomeSuccess,
+		Context:      context,
+	})
 }
 
 func latestSandboxCondition(sandbox *unstructured.Unstructured) (sandboxCondition, bool) {

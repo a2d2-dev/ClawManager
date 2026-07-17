@@ -3,7 +3,9 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -15,9 +17,11 @@ import (
 	"clawreef/internal/services/k8s"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	kruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -575,6 +579,149 @@ func TestSandboxBackendStatusUsesLatestConditionForStaleSuspended(t *testing.T) 
 	}
 }
 
+func TestSandboxBackendStatusAuditIgnoresStaleConditionAndDedupesRepeatObservation(t *testing.T) {
+	instance := sandboxTestInstance(189, "creating")
+	conditions := []any{
+		map[string]any{"type": "Suspended", "status": "True", "reason": "SandboxSuspended", "observedGeneration": int64(3), "lastTransitionTime": "2026-07-17T03:00:00Z"},
+		map[string]any{"type": "Ready", "status": "True", "reason": "DependenciesReady", "observedGeneration": int64(4), "lastTransitionTime": "2026-07-17T03:02:00Z"},
+	}
+	sandbox := sandboxObjectForTest(instance, conditions)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+	var sink bytes.Buffer
+	backend.service.auditLogger = NewJSONLAuditLogger(&sink, true)
+
+	if _, err := backend.Status(context.Background(), instance); err != nil {
+		t.Fatalf("first Status returned error: %v", err)
+	}
+	if _, err := backend.Status(context.Background(), instance); err != nil {
+		t.Fatalf("repeat Status returned error: %v", err)
+	}
+
+	events := auditEventsFromSink(t, &sink)
+	t.Logf("audit event sequence: %s", auditEventSequence(events))
+	if got := auditEventSequence(events); got != AuditEventSandboxReady {
+		t.Fatalf("audit event sequence = %s, want %s", got, AuditEventSandboxReady)
+	}
+	assertAuditEvent(t, events[0], AuditEventSandboxReady, InstanceModeIsolated, "DependenciesReady")
+}
+
+func TestSandboxBackendStatusAuditRetriesAfterAnnotationUpdateConflict(t *testing.T) {
+	instance := sandboxTestInstance(190, "creating")
+	conditions := []any{
+		map[string]any{"type": "Ready", "status": "True", "reason": "DependenciesReady", "observedGeneration": int64(4), "lastTransitionTime": "2026-07-17T03:02:00Z"},
+	}
+	sandbox := sandboxObjectForTest(instance, conditions)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	updateAttempts := 0
+	dynamicClient.PrependReactor("update", "sandboxes", func(action k8stesting.Action) (bool, kruntime.Object, error) {
+		updateAttempts++
+		if updateAttempts == 1 {
+			return true, nil, apierrors.NewConflict(schema.GroupResource{Group: AgentSandboxGroup, Resource: "sandboxes"}, sandbox.GetName(), errors.New("stale resource version"))
+		}
+		return false, nil, nil
+	})
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+	var sink bytes.Buffer
+	backend.service.auditLogger = NewJSONLAuditLogger(&sink, true)
+
+	status, err := backend.Status(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("first Status returned error: %v", err)
+	}
+	if status.Status != "running" {
+		t.Fatalf("first status = %q, want running", status.Status)
+	}
+	if events := auditEventsFromSink(t, &sink); len(events) != 0 {
+		t.Fatalf("first Status emitted audit events = %#v, want none", events)
+	}
+
+	status, err = backend.Status(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("retry Status returned error: %v", err)
+	}
+	if status.Status != "running" {
+		t.Fatalf("retry status = %q, want running", status.Status)
+	}
+	events := auditEventsFromSink(t, &sink)
+	t.Logf("audit event sequence after retry: %s", auditEventSequence(events))
+	if got := auditEventSequence(events); got != AuditEventSandboxReady {
+		t.Fatalf("audit event sequence = %s, want %s", got, AuditEventSandboxReady)
+	}
+	assertAuditEvent(t, events[0], AuditEventSandboxReady, InstanceModeIsolated, "DependenciesReady")
+	if updateAttempts != 2 {
+		t.Fatalf("update attempts = %d, want first conflict then retry success", updateAttempts)
+	}
+}
+
+func TestSandboxBackendStatusAuditEmitsReadyThenFinishedTransitions(t *testing.T) {
+	instance := sandboxTestInstance(290, "creating")
+	readyConditions := []any{
+		map[string]any{"type": "Ready", "status": "True", "reason": "DependenciesReady", "observedGeneration": int64(1), "lastTransitionTime": "2026-07-17T03:10:00Z"},
+	}
+	sandbox := sandboxObjectForTest(instance, readyConditions)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+	var sink bytes.Buffer
+	backend.service.auditLogger = NewJSONLAuditLogger(&sink, true)
+
+	if _, err := backend.Status(context.Background(), instance); err != nil {
+		t.Fatalf("ready Status returned error: %v", err)
+	}
+	finishedConditions := []any{
+		map[string]any{"type": "Ready", "status": "False", "reason": "PodTerminated", "observedGeneration": int64(2), "lastTransitionTime": "2026-07-17T03:11:00Z"},
+		map[string]any{"type": "Finished", "status": "True", "reason": "PodSucceeded", "observedGeneration": int64(2), "lastTransitionTime": "2026-07-17T03:12:00Z"},
+	}
+	updateSandboxConditionsForTest(t, dynamicClient, instance, finishedConditions)
+	if _, err := backend.Status(context.Background(), instance); err != nil {
+		t.Fatalf("finished Status returned error: %v", err)
+	}
+	if _, err := backend.Status(context.Background(), instance); err != nil {
+		t.Fatalf("repeat finished Status returned error: %v", err)
+	}
+
+	events := auditEventsFromSink(t, &sink)
+	t.Logf("audit event sequence: %s", auditEventSequence(events))
+	if got, want := auditEventSequence(events), AuditEventSandboxReady+","+AuditEventSandboxFinished; got != want {
+		t.Fatalf("audit event sequence = %s, want %s", got, want)
+	}
+	assertAuditEvent(t, events[0], AuditEventSandboxReady, InstanceModeIsolated, "DependenciesReady")
+	assertAuditEvent(t, events[1], AuditEventSandboxFinished, InstanceModeIsolated, "PodSucceeded")
+}
+
+func TestSandboxBackendStatusAuditDoesNotReportSuspendedStopAsFinished(t *testing.T) {
+	instance := sandboxTestInstance(291, "running")
+	conditions := []any{
+		map[string]any{"type": "Suspended", "status": "True", "reason": "SandboxSuspended", "observedGeneration": int64(5), "lastTransitionTime": "2026-07-17T03:20:00Z"},
+	}
+	sandbox := sandboxObjectForTest(instance, conditions)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+	var sink bytes.Buffer
+	backend.service.auditLogger = NewJSONLAuditLogger(&sink, true)
+
+	status, err := backend.Status(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if status.Status != "stopped" {
+		t.Fatalf("status = %q, want stopped", status.Status)
+	}
+	events := auditEventsFromSink(t, &sink)
+	t.Logf("audit event sequence: %s", auditEventSequence(events))
+	if len(events) != 0 {
+		t.Fatalf("Suspended condition emitted audit events = %#v, want none", events)
+	}
+}
+
 func TestSandboxBackendStatusMapsSuspendedAndFinishedConditions(t *testing.T) {
 	suspended := sandboxStateFromConditions(&unstructured.Unstructured{Object: map[string]any{
 		"status": map[string]any{"conditions": []any{
@@ -610,6 +757,8 @@ func TestSandboxBackendStatusRecoversPodFailedSandboxBySuspendedRunningFlip(t *t
 	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
 	backend.deletePoll = time.Nanosecond
 	backend.deleteTimeout = time.Second
+	var sink bytes.Buffer
+	backend.service.auditLogger = NewJSONLAuditLogger(&sink, true)
 
 	status, err := backend.Status(context.Background(), instance)
 	if err != nil {
@@ -636,6 +785,21 @@ func TestSandboxBackendStatusRecoversPodFailedSandboxBySuspendedRunningFlip(t *t
 	env := envMapFromContainer(t, containers[0].(map[string]interface{}))
 	if env["HTTP_PROXY"] != "http://proxy.good:3128" || env["CLAWMANAGER_AGENT_ENABLED"] != "true" {
 		t.Fatalf("recovery must refresh pod env before resume, got %#v", env)
+	}
+	events := auditEventsFromSink(t, &sink)
+	t.Logf("audit event sequence: %s", auditEventSequence(events))
+	if got, want := auditEventSequence(events), AuditEventSandboxFinished+","+AuditEventSandboxRecreated; got != want {
+		t.Fatalf("audit event sequence = %s, want %s", got, want)
+	}
+	assertAuditEvent(t, events[0], AuditEventSandboxFinished, InstanceModeIsolated, "PodFailed")
+	if events[1]["event"] != AuditEventSandboxRecreated {
+		t.Fatalf("event[1] = %v, want %s", events[1]["event"], AuditEventSandboxRecreated)
+	}
+	if events[1]["instance_mode"] != InstanceModeIsolated {
+		t.Fatalf("recreated instance_mode = %v, want %s", events[1]["instance_mode"], InstanceModeIsolated)
+	}
+	if events[1]["attempt_count"] != float64(1) {
+		t.Fatalf("recreated attempt_count = %v, want 1", events[1]["attempt_count"])
 	}
 }
 
@@ -820,6 +984,67 @@ func newDynamicClientWithSandboxes(t *testing.T, sandboxes ...*unstructured.Unst
 	}
 	client.ClearActions()
 	return client
+}
+
+func updateSandboxConditionsForTest(t *testing.T, client dynamic.Interface, instance *models.Instance, conditions []any) {
+	t.Helper()
+	namespace := "clawreef-user-45"
+	if instance.PodNamespace != nil {
+		namespace = *instance.PodNamespace
+	}
+	name := "clawreef-" + strconv.Itoa(instance.ID) + "-isolated"
+	if instance.PodName != nil {
+		name = *instance.PodName
+	}
+	sandbox, err := client.Resource(sandboxGVR).Namespace(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get sandbox for condition update: %v", err)
+	}
+	if err := unstructured.SetNestedSlice(sandbox.Object, conditions, "status", "conditions"); err != nil {
+		t.Fatalf("set sandbox conditions: %v", err)
+	}
+	if _, err := client.Resource(sandboxGVR).Namespace(namespace).Update(context.Background(), sandbox, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update sandbox conditions: %v", err)
+	}
+}
+
+func auditEventsFromSink(t *testing.T, sink *bytes.Buffer) []map[string]interface{} {
+	t.Helper()
+	raw := strings.TrimSpace(sink.String())
+	if raw == "" {
+		return nil
+	}
+	lines := strings.Split(raw, "\n")
+	events := make([]map[string]interface{}, 0, len(lines))
+	for _, line := range lines {
+		var event map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("audit line is not valid JSON: %v; line=%q", err, line)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func auditEventSequence(events []map[string]interface{}) string {
+	names := make([]string, 0, len(events))
+	for _, event := range events {
+		names = append(names, fmt.Sprint(event["event"]))
+	}
+	return strings.Join(names, ",")
+}
+
+func assertAuditEvent(t *testing.T, event map[string]interface{}, eventName, instanceMode, reason string) {
+	t.Helper()
+	if event["event"] != eventName {
+		t.Fatalf("event = %v, want %s", event["event"], eventName)
+	}
+	if event["instance_mode"] != instanceMode {
+		t.Fatalf("instance_mode = %v, want %s", event["instance_mode"], instanceMode)
+	}
+	if event["condition_reason"] != reason {
+		t.Fatalf("condition_reason = %v, want %s", event["condition_reason"], reason)
+	}
 }
 
 func sandboxTestInstance(id int, status string) *models.Instance {
