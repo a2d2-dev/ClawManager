@@ -878,6 +878,9 @@ type v2LifecycleInstanceRepo struct {
 	nextID        int
 	deleteErr     error
 	beforeDelete  func(int)
+	updateCalls   int
+	failUpdateAt  int
+	updateErr     error
 }
 
 type v2RuntimeStateRecord struct {
@@ -1005,6 +1008,12 @@ func (r *v2LifecycleInstanceRepo) UpdateWorkspaceUsage(context.Context, int, int
 }
 
 func (r *v2LifecycleInstanceRepo) Update(instance *models.Instance) error {
+	r.updateCalls++
+	if r.updateErr != nil && r.failUpdateAt > 0 && r.updateCalls == r.failUpdateAt {
+		err := r.updateErr
+		r.updateErr = nil
+		return err
+	}
 	copy := *instance
 	r.byID[instance.ID] = &copy
 	r.updated = append(r.updated, copy)

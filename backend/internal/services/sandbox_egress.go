@@ -11,27 +11,51 @@ import (
 
 const EgressProxyUnreachableCode = "egress_proxy_unreachable"
 
-var isolatedReservedProxyEnvKeys = map[string]struct{}{
-	"HTTP_PROXY":  {},
-	"HTTPS_PROXY": {},
-	"http_proxy":  {},
-	"https_proxy": {},
-	"NO_PROXY":    {},
-	"no_proxy":    {},
+var isolatedReservedProxyEnvKeys = []string{
+	"HTTP_PROXY",
+	"HTTPS_PROXY",
+	"http_proxy",
+	"https_proxy",
+	"NO_PROXY",
+	"no_proxy",
 }
 
 type egressProxyPrecheck func(context.Context, string) error
 
 func rejectIsolatedReservedProxyOverrides(overrides map[string]string) error {
 	for key := range overrides {
-		if _, reserved := isolatedReservedProxyEnvKeys[key]; reserved {
-			return fmt.Errorf("reserved proxy environment variable %s cannot be overridden for isolated instances", key)
+		if canonical, reserved := canonicalIsolatedReservedProxyEnvKey(key); reserved {
+			return fmt.Errorf("reserved proxy environment variable %s cannot be overridden for isolated instances", canonical)
 		}
 	}
 	return nil
 }
 
+func canonicalIsolatedReservedProxyEnvKey(key string) (string, bool) {
+	for _, reserved := range isolatedReservedProxyEnvKeys {
+		if strings.EqualFold(strings.TrimSpace(key), reserved) {
+			return reserved, true
+		}
+	}
+	return "", false
+}
+
+func stripIsolatedReservedProxyEnvKeys(env map[string]string) map[string]string {
+	if len(env) == 0 {
+		return env
+	}
+	stripped := make(map[string]string, len(env))
+	for key, value := range env {
+		if _, reserved := canonicalIsolatedReservedProxyEnvKey(key); reserved {
+			continue
+		}
+		stripped[key] = value
+	}
+	return stripped
+}
+
 func withRequiredProxyEnv(env map[string]string, proxyURL string) map[string]string {
+	env = stripIsolatedReservedProxyEnvKeys(env)
 	return mergeEnvMaps(env, proxyEnvForURL(proxyURL))
 }
 

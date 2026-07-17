@@ -25,6 +25,8 @@ func TestBuildIsolatedSandboxObjectRendersSpecAndForcesProxyEnv(t *testing.T) {
 	rawOverrides, err := marshalEnvironmentOverrides(map[string]string{
 		"CUSTOM_ENV":             "custom",
 		"HTTP_PROXY":             "http://override.invalid:3128",
+		"Http_Proxy":             "http://mixed-case.invalid:3128",
+		"No_Proxy":               "mixed.invalid",
 		"SUBFOLDER":              "/desktop",
 		"SELKIES_ENCODER":        "jpeg",
 		"KASM_SVC_SEND_CUT_TEXT": "1",
@@ -139,6 +141,9 @@ func TestBuildIsolatedSandboxObjectRendersSpecAndForcesProxyEnv(t *testing.T) {
 	if env["HTTP_PROXY"] != "http://proxy.good:3128" || env["HTTPS_PROXY"] != "http://proxy.good:3128" {
 		t.Fatalf("proxy env was not forced: %#v", env)
 	}
+	if env["Http_Proxy"] != "" || env["No_Proxy"] != "" {
+		t.Fatalf("mixed-case proxy env variants must be stripped before replay: %#v", env)
+	}
 	if env["CUSTOM_ENV"] != "custom" || env["OPENAI_API_KEY"] != "model-token" || env["CLAWMANAGER_AGENT_ENABLED"] != "true" {
 		t.Fatalf("governed/custom env missing: %#v", env)
 	}
@@ -162,6 +167,36 @@ func TestBuildIsolatedSandboxObjectRendersSpecAndForcesProxyEnv(t *testing.T) {
 	}
 	if workspace["spec"].(map[string]interface{})["storageClassName"] != "manual" {
 		t.Fatalf("workspace storageClassName = %#v", workspace["spec"].(map[string]interface{})["storageClassName"])
+	}
+}
+
+func TestBuildIsolatedSandboxObjectOmitsUnsafeInstanceNameLabel(t *testing.T) {
+	instance := sandboxTestInstance(102, "creating")
+	instance.Name = "Name With Spaces 中文"
+
+	sandbox, err := buildIsolatedSandboxObject(isolatedSandboxSpec{
+		Instance:   instance,
+		Name:       "clawreef-102-safe",
+		Namespace:  "clawreef-user-45",
+		Image:      "registry/openclaw-lite:latest",
+		RuntimeEnv: isolatedBaseRuntimeEnv(instance),
+		GatewayEnv: map[string]string{"CLAWMANAGER_INSTANCE_TOKEN": "token"},
+		AgentEnv:   map[string]string{"CLAWMANAGER_AGENT_BOOTSTRAP_TOKEN": "agent"},
+		ProxyURL:   "http://proxy.good:3128",
+	})
+	if err != nil {
+		t.Fatalf("buildIsolatedSandboxObject returned error: %v", err)
+	}
+	labels := sandbox.GetLabels()
+	if _, ok := labels["instance-name"]; ok {
+		t.Fatalf("metadata labels must not include unsafe instance-name value: %#v", labels)
+	}
+	podLabels, _, _ := unstructured.NestedStringMap(sandbox.Object, "spec", "podTemplate", "metadata", "labels")
+	if _, ok := podLabels["instance-name"]; ok {
+		t.Fatalf("pod labels must not include unsafe instance-name value: %#v", podLabels)
+	}
+	if labels["instance-id"] != "102" || podLabels["instance-id"] != "102" {
+		t.Fatalf("instance-id label must remain for association, metadata=%#v pod=%#v", labels, podLabels)
 	}
 }
 
@@ -214,7 +249,11 @@ func TestSandboxBackendCreateCreatesSandboxSpecWithGovernedEnv(t *testing.T) {
 		t.Fatalf("prometheus annotations = %#v", annotations)
 	}
 	containers := nestedSlice(t, sandbox, "spec", "podTemplate", "spec", "containers")
-	env := envMapFromContainer(t, containers[0].(map[string]interface{}))
+	container := containers[0].(map[string]interface{})
+	if container["image"] != defaultGatewaySystemImageSettings["openclaw"] {
+		t.Fatalf("created sandbox image = %q, want platform gateway default %q", container["image"], defaultGatewaySystemImageSettings["openclaw"])
+	}
+	env := envMapFromContainer(t, container)
 	if env["HTTP_PROXY"] != "http://proxy.good:3128" || env["OPENAI_MODEL"] != "auto" || env["CLAWMANAGER_AGENT_ENABLED"] != "true" || env["CUSTOM_ENV"] != "from-create" {
 		t.Fatalf("created sandbox env missing governed/proxy/custom values: %#v", env)
 	}
@@ -247,7 +286,7 @@ func TestIsolatedReservedProxyEnvRejectedOnCreateAndUpdate(t *testing.T) {
 		DiskGB:               20,
 		OSType:               "openclaw",
 		OSVersion:            "latest",
-		EnvironmentOverrides: map[string]string{"HTTP_PROXY": "http://bad"},
+		EnvironmentOverrides: map[string]string{"Http_Proxy": "http://bad"},
 	})
 	if err == nil || !strings.Contains(err.Error(), "reserved proxy environment variable HTTP_PROXY") {
 		t.Fatalf("Create error = %v, want reserved proxy rejection", err)
@@ -257,10 +296,79 @@ func TestIsolatedReservedProxyEnvRejectedOnCreateAndUpdate(t *testing.T) {
 	}
 
 	instanceRepo.byID[77] = &models.Instance{ID: 77, UserID: 45, Name: "Existing", Type: "openclaw", RuntimeType: RuntimeBackendGateway, InstanceMode: InstanceModeIsolated}
-	overrides := map[string]string{"HTTPS_PROXY": "http://bad"}
+	overrides := map[string]string{"No_Proxy": "bad.local"}
 	err = service.Update(77, UpdateInstanceRequest{EnvironmentOverrides: &overrides})
-	if err == nil || !strings.Contains(err.Error(), "reserved proxy environment variable HTTPS_PROXY") {
+	if err == nil || !strings.Contains(err.Error(), "reserved proxy environment variable NO_PROXY") {
 		t.Fatalf("Update error = %v, want reserved proxy rejection", err)
+	}
+
+	err = service.ValidateCreateRequests(45, []CreateInstanceRequest{{
+		Name:                 "Batch Bad Proxy",
+		Type:                 "openclaw",
+		Mode:                 InstanceModeIsolated,
+		RuntimeType:          RuntimeBackendGateway,
+		CPUCores:             2,
+		MemoryGB:             4,
+		DiskGB:               20,
+		OSType:               "openclaw",
+		OSVersion:            "latest",
+		EnvironmentOverrides: map[string]string{"HTTPS_proxy": "http://bad"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "reserved proxy environment variable HTTPS_PROXY") {
+		t.Fatalf("ValidateCreateRequests error = %v, want reserved proxy rejection", err)
+	}
+}
+
+func TestIsolatedCustomImageRejectedOnCreateAndUpdate(t *testing.T) {
+	instanceRepo := newV2LifecycleInstanceRepo()
+	service := &instanceService{
+		instanceRepo:        instanceRepo,
+		quotaRepo:           v2LifecycleQuotaRepo{},
+		runtimeCapabilities: isolatedAvailableCapabilities(),
+	}
+	customImage := "registry.example.com/custom/openclaw-lite:latest"
+	_, err := service.Create(45, CreateInstanceRequest{
+		Name:          "Bad Image",
+		Type:          "openclaw",
+		Mode:          InstanceModeIsolated,
+		RuntimeType:   RuntimeBackendGateway,
+		CPUCores:      2,
+		MemoryGB:      4,
+		DiskGB:        20,
+		OSType:        "openclaw",
+		OSVersion:     "latest",
+		ImageRegistry: &customImage,
+	})
+	if err == nil || !strings.Contains(err.Error(), "isolated mode can only use platform images") {
+		t.Fatalf("Create error = %v, want isolated platform image rejection", err)
+	}
+	if len(instanceRepo.created) != 0 {
+		t.Fatalf("custom image create must not persist instance, got %#v", instanceRepo.created)
+	}
+
+	instanceRepo.byID[78] = &models.Instance{ID: 78, UserID: 45, Name: "Existing", Type: "openclaw", RuntimeType: RuntimeBackendGateway, InstanceMode: InstanceModeIsolated}
+	tag := "custom"
+	err = service.Update(78, UpdateInstanceRequest{ImageTag: &tag})
+	if err == nil || !strings.Contains(err.Error(), "isolated mode can only use platform images") {
+		t.Fatalf("Update error = %v, want isolated platform image rejection", err)
+	}
+}
+
+func TestIsolatedGatewayImageUsesPlatformGatewaySystemSetting(t *testing.T) {
+	SetRuntimeImageSettingsProvider(nil)
+	defer SetRuntimeImageSettingsProvider(nil)
+
+	repo := &stubSystemImageSettingRepository{
+		items: []models.SystemImageSetting{
+			{ID: 1, InstanceType: "openclaw", RuntimeType: "desktop", DisplayName: "OpenClaw Pro", Image: "registry/openclaw-desktop:latest", IsEnabled: true},
+			{ID: 2, InstanceType: "openclaw", RuntimeType: "gateway", DisplayName: "OpenClaw Lite", Image: "registry/platform-openclaw-lite:v2", IsEnabled: true},
+		},
+		nextID: 2,
+	}
+	SetRuntimeImageSettingsProvider(NewSystemImageSettingService(repo))
+
+	if got := isolatedGatewayImage("openclaw"); got != "registry/platform-openclaw-lite:v2" {
+		t.Fatalf("isolatedGatewayImage = %q, want gateway platform image", got)
 	}
 }
 
@@ -326,7 +434,71 @@ func TestSandboxBackendCreateUnavailableWhenProxyURLMissing(t *testing.T) {
 	}
 }
 
+func TestSandboxBackendCreateRollbackDeletesDBWhenSandboxCleanupSucceeds(t *testing.T) {
+	setManagedRuntimeEnvForTest(t)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.failUpdateAt = 3
+	instanceRepo.updateErr = errors.New("db update failed")
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(kruntime.NewScheme())
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+
+	_, err := backend.Create(context.Background(), 45, CreateInstanceRequest{
+		Name:      "Rollback Cleanup",
+		Type:      "openclaw",
+		CPUCores:  2,
+		MemoryGB:  4,
+		DiskGB:    20,
+		OSType:    "openclaw",
+		OSVersion: "latest",
+	}, InstanceModeIsolated, RuntimeBackendGateway, nil)
+	if err == nil || !strings.Contains(err.Error(), "failed to update isolated instance workload info") {
+		t.Fatalf("Create error = %v, want workload update failure", err)
+	}
+	if _, ok := instanceRepo.byID[1]; ok {
+		t.Fatalf("DB record should be deleted after successful Sandbox rollback, got %#v", instanceRepo.byID[1])
+	}
+	if len(instanceRepo.deleted) != 1 || instanceRepo.deleted[0] != 1 {
+		t.Fatalf("deleted records = %#v, want instance 1", instanceRepo.deleted)
+	}
+	if _, err := dynamicClient.Resource(sandboxGVR).Namespace("clawreef-user-45").Get(context.Background(), "clawreef-1-rollback-cleanup", metav1.GetOptions{}); err == nil {
+		t.Fatalf("Sandbox should be deleted after successful rollback")
+	}
+}
+
+func TestSandboxBackendCreateRollbackPreservesDBWhenSandboxCleanupFails(t *testing.T) {
+	setManagedRuntimeEnvForTest(t)
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.failUpdateAt = 3
+	instanceRepo.updateErr = errors.New("db update failed")
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(kruntime.NewScheme())
+	dynamicClient.PrependReactor("delete", "sandboxes", func(action k8stesting.Action) (bool, kruntime.Object, error) {
+		return true, nil, errors.New("delete denied")
+	})
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+
+	_, err := backend.Create(context.Background(), 45, CreateInstanceRequest{
+		Name:      "Rollback Preserve",
+		Type:      "openclaw",
+		CPUCores:  2,
+		MemoryGB:  4,
+		DiskGB:    20,
+		OSType:    "openclaw",
+		OSVersion: "latest",
+	}, InstanceModeIsolated, RuntimeBackendGateway, nil)
+	if err == nil || !strings.Contains(err.Error(), "failed to update isolated instance workload info") {
+		t.Fatalf("Create error = %v, want workload update failure", err)
+	}
+	if len(instanceRepo.deleted) != 0 {
+		t.Fatalf("DB record must not be deleted when Sandbox cleanup fails, deleted=%#v", instanceRepo.deleted)
+	}
+	stored := instanceRepo.byID[1]
+	if stored == nil || stored.Status != "error" || stored.RuntimeErrorMessage == nil || !strings.Contains(*stored.RuntimeErrorMessage, "delete denied") {
+		t.Fatalf("stored instance after rollback cleanup failure = %#v", stored)
+	}
+}
+
 func TestSandboxBackendLifecyclePatchesOperatingMode(t *testing.T) {
+	setManagedRuntimeEnvForTest(t)
 	instance := sandboxTestInstance(88, "running")
 	sandbox := sandboxObjectForTest(instance, nil)
 	instanceRepo := newV2LifecycleInstanceRepo()
@@ -348,6 +520,13 @@ func TestSandboxBackendLifecyclePatchesOperatingMode(t *testing.T) {
 		t.Fatalf("instance status after Stop = %q, want stopped", instanceRepo.byID[88].Status)
 	}
 
+	instance.EnvironmentOverridesJSON = mustMarshalEnvOverrides(t, map[string]string{
+		"CUSTOM_ENV": "rotated",
+		"Http_Proxy": "http://stale.invalid:3128",
+	})
+	backend.proxyURL = func() (string, bool) {
+		return "http://proxy.rotated:3128", true
+	}
 	if err := backend.Start(context.Background(), instance, RuntimeBackendGateway); err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -357,6 +536,14 @@ func TestSandboxBackendLifecyclePatchesOperatingMode(t *testing.T) {
 	}
 	if mode, _, _ := unstructured.NestedString(got.Object, "spec", "operatingMode"); mode != sandboxOperatingModeRunning {
 		t.Fatalf("operatingMode after Start = %q, want Running", mode)
+	}
+	containers := nestedSlice(t, got, "spec", "podTemplate", "spec", "containers")
+	env := envMapFromContainer(t, containers[0].(map[string]interface{}))
+	if env["HTTP_PROXY"] != "http://proxy.rotated:3128" || env["CUSTOM_ENV"] != "rotated" {
+		t.Fatalf("Start must refresh pod env with rotated proxy/custom env, got %#v", env)
+	}
+	if _, ok := env["Http_Proxy"]; ok {
+		t.Fatalf("Start env refresh must strip mixed-case proxy variants, got %#v", env)
 	}
 	if instanceRepo.byID[88].Status != "creating" {
 		t.Fatalf("instance status after Start = %q, want creating", instanceRepo.byID[88].Status)
@@ -407,7 +594,8 @@ func TestSandboxBackendStatusMapsSuspendedAndFinishedConditions(t *testing.T) {
 	}
 }
 
-func TestSandboxBackendStatusRecreatesPodFailedSandbox(t *testing.T) {
+func TestSandboxBackendStatusRecoversPodFailedSandboxBySuspendedRunningFlip(t *testing.T) {
+	setManagedRuntimeEnvForTest(t)
 	instance := sandboxTestInstance(90, "running")
 	conditions := []any{
 		map[string]any{"type": "Ready", "status": "False", "reason": "PodFailed", "observedGeneration": int64(1)},
@@ -426,20 +614,85 @@ func TestSandboxBackendStatusRecreatesPodFailedSandbox(t *testing.T) {
 		t.Fatalf("Status returned error: %v", err)
 	}
 	if status.Status != "creating" {
-		t.Fatalf("status after PodFailed recreate = %q, want creating", status.Status)
+		t.Fatalf("status after PodFailed recovery = %q, want creating", status.Status)
 	}
-	assertAction(t, dynamicClient, "delete")
-	assertAction(t, dynamicClient, "create")
-	recreated, err := dynamicClient.Resource(sandboxGVR).Namespace("clawreef-user-45").Get(context.Background(), "clawreef-90-isolated", metav1.GetOptions{})
+	assertAction(t, dynamicClient, "update")
+	assertNoAction(t, dynamicClient, "delete")
+	assertNoAction(t, dynamicClient, "create")
+	recovered, err := dynamicClient.Resource(sandboxGVR).Namespace("clawreef-user-45").Get(context.Background(), "clawreef-90-isolated", metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("get recreated sandbox: %v", err)
+		t.Fatalf("get recovered sandbox: %v", err)
 	}
-	if _, ok, _ := unstructured.NestedMap(recreated.Object, "status"); ok {
-		t.Fatalf("recreated sandbox must not carry stale status: %#v", recreated.Object["status"])
+	if mode, _, _ := unstructured.NestedString(recovered.Object, "spec", "operatingMode"); mode != sandboxOperatingModeRunning {
+		t.Fatalf("recovered operatingMode = %q, want Running", mode)
 	}
-	if mode, _, _ := unstructured.NestedString(recreated.Object, "spec", "operatingMode"); mode != sandboxOperatingModeRunning {
-		t.Fatalf("recreated operatingMode = %q, want Running", mode)
+	annotations := recovered.GetAnnotations()
+	if annotations[sandboxRecreateAttemptsAnnotation] != "1" || annotations[sandboxRecreateLastAttemptAnnotation] == "" {
+		t.Fatalf("recovery annotations = %#v, want attempt count and timestamp", annotations)
 	}
+	containers := nestedSlice(t, recovered, "spec", "podTemplate", "spec", "containers")
+	env := envMapFromContainer(t, containers[0].(map[string]interface{}))
+	if env["HTTP_PROXY"] != "http://proxy.good:3128" || env["CLAWMANAGER_AGENT_ENABLED"] != "true" {
+		t.Fatalf("recovery must refresh pod env before resume, got %#v", env)
+	}
+}
+
+func TestSandboxBackendStatusSkipsPodFailedRecoveryDuringCooldown(t *testing.T) {
+	instance := sandboxTestInstance(91, "running")
+	conditions := []any{
+		map[string]any{"type": "Finished", "status": "True", "reason": "PodFailed", "observedGeneration": int64(2)},
+	}
+	sandbox := sandboxObjectForTest(instance, conditions)
+	sandbox.SetAnnotations(map[string]string{
+		sandboxRecreateAttemptsAnnotation:    "1",
+		sandboxRecreateLastAttemptAnnotation: time.Now().UTC().Format(time.RFC3339),
+	})
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+
+	status, err := backend.Status(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if status.Status != "creating" || status.PodStatus != "recreate_cooldown" {
+		t.Fatalf("status during cooldown = %#v, want creating/recreate_cooldown", status)
+	}
+	assertNoAction(t, dynamicClient, "update")
+	assertNoAction(t, dynamicClient, "delete")
+	assertNoAction(t, dynamicClient, "create")
+}
+
+func TestSandboxBackendStatusMarksErrorAfterRecoveryAttemptLimit(t *testing.T) {
+	instance := sandboxTestInstance(92, "running")
+	conditions := []any{
+		map[string]any{"type": "Finished", "status": "True", "reason": "PodFailed", "observedGeneration": int64(3)},
+	}
+	sandbox := sandboxObjectForTest(instance, conditions)
+	sandbox.SetAnnotations(map[string]string{
+		sandboxRecreateAttemptsAnnotation:    strconv.Itoa(sandboxRecreateMaxAttempts),
+		sandboxRecreateLastAttemptAnnotation: time.Now().Add(-sandboxRecreateCooldown).UTC().Format(time.RFC3339),
+	})
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[instance.ID] = instance
+	dynamicClient := newDynamicClientWithSandboxes(t, sandbox)
+	backend := newSandboxBackendForTest(instanceRepo, dynamicClient)
+
+	status, err := backend.Status(context.Background(), instance)
+	if err != nil {
+		t.Fatalf("Status returned error: %v", err)
+	}
+	if status.Status != "error" || status.PodStatus != "recreate_limit_exceeded" {
+		t.Fatalf("status after recovery limit = %#v, want error/recreate_limit_exceeded", status)
+	}
+	stored := instanceRepo.byID[instance.ID]
+	if stored.Status != "error" || stored.RuntimeErrorMessage == nil || !strings.Contains(*stored.RuntimeErrorMessage, "recovery stopped") {
+		t.Fatalf("stored instance after recovery limit = %#v", stored)
+	}
+	assertNoAction(t, dynamicClient, "update")
+	assertNoAction(t, dynamicClient, "delete")
+	assertNoAction(t, dynamicClient, "create")
 }
 
 func TestDefaultEgressProxyPrecheckParsesAndDialsProxy(t *testing.T) {
@@ -611,6 +864,15 @@ func assertAction(t *testing.T, client *dynamicfake.FakeDynamicClient, verb stri
 	t.Fatalf("expected %s action for sandboxes, got %v", verb, verbs)
 }
 
+func assertNoAction(t *testing.T, client *dynamicfake.FakeDynamicClient, verb string) {
+	t.Helper()
+	for _, action := range client.Actions() {
+		if action.GetVerb() == verb && action.GetResource().Resource == "sandboxes" {
+			t.Fatalf("unexpected %s action for sandboxes: %#v", verb, client.Actions())
+		}
+	}
+}
+
 func mustMarshalEnvOverrides(t *testing.T, env map[string]string) *string {
 	t.Helper()
 	raw, err := marshalEnvironmentOverrides(env)
@@ -618,4 +880,10 @@ func mustMarshalEnvOverrides(t *testing.T, env map[string]string) *string {
 		t.Fatalf("marshal env overrides: %v", err)
 	}
 	return raw
+}
+
+func setManagedRuntimeEnvForTest(t *testing.T) {
+	t.Helper()
+	t.Setenv("CLAWMANAGER_LLM_GATEWAY_BASE_URL", "http://gateway.example/api/v1/gateway/llm")
+	t.Setenv("CLAWMANAGER_AGENT_CONTROL_BASE_URL", "http://agent-control.example")
 }

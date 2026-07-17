@@ -62,6 +62,9 @@ func (s *instanceService) ValidateCreateRequests(userID int, requests []CreateIn
 			if err := rejectIsolatedReservedProxyOverrides(environmentOverrides); err != nil {
 				return err
 			}
+			if err := rejectIsolatedCustomImage(requests[idx].ImageRegistry, requests[idx].ImageTag); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -205,6 +208,8 @@ type UpdateInstanceRequest struct {
 	Name                 *string            `json:"name,omitempty" validate:"omitempty,min=3,max=50"`
 	Description          *string            `json:"description,omitempty"`
 	DesktopStreamProfile *string            `json:"desktop_stream_profile,omitempty" validate:"omitempty,oneof=low standard high"`
+	ImageRegistry        *string            `json:"image_registry,omitempty"`
+	ImageTag             *string            `json:"image_tag,omitempty"`
 	EnvironmentOverrides *map[string]string `json:"environment_overrides,omitempty"`
 }
 
@@ -353,6 +358,9 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	if instanceMode == InstanceModeIsolated {
 		if err := rejectIsolatedReservedProxyOverrides(environmentOverrides); err != nil {
 			s.emitCreateRefused(userID, instanceMode, req, refusalCodeForError(err))
+			return nil, err
+		}
+		if err := rejectIsolatedCustomImage(req.ImageRegistry, req.ImageTag); err != nil {
 			return nil, err
 		}
 	}
@@ -1098,6 +1106,15 @@ func (s *instanceService) Update(instanceID int, req UpdateInstanceRequest) erro
 			return err
 		}
 		instance.EnvironmentOverridesJSON = environmentOverridesJSON
+	}
+	instanceMode, err := modeForExistingInstance(instance)
+	if err != nil {
+		return err
+	}
+	if instanceMode == InstanceModeIsolated {
+		if err := rejectIsolatedCustomImage(req.ImageRegistry, req.ImageTag); err != nil {
+			return err
+		}
 	}
 
 	instance.UpdatedAt = time.Now()

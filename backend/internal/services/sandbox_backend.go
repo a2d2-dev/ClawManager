@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
-	"os"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,7 +19,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/dynamic"
 )
@@ -37,6 +36,11 @@ const (
 
 	isolatedWorkspaceMountPath = "/workspaces"
 	isolatedConfigMountPath    = "/config"
+
+	sandboxRecreateAttemptsAnnotation    = "clawmanager.io/recreate-attempts"
+	sandboxRecreateLastAttemptAnnotation = "clawmanager.io/recreate-last-attempt"
+	sandboxRecreateMaxAttempts           = 3
+	sandboxRecreateCooldown              = 5 * time.Minute
 )
 
 // agent-sandbox is pinned to v0.5.1/v1beta1. Re-check this GVR and the
@@ -91,6 +95,12 @@ type sandboxCondition struct {
 	Index              int
 }
 
+type sandboxRecoveryDecision struct {
+	Status       string
+	PodStatus    string
+	ErrorMessage *string
+}
+
 func newSandboxBackend(s *instanceService) *sandboxBackend {
 	backend := &sandboxBackend{
 		service:       s,
@@ -132,6 +142,9 @@ func (b *sandboxBackend) Create(ctx context.Context, userID int, req CreateInsta
 	if !ok {
 		return nil, fmt.Errorf("isolated runtime backend requires managed runtime type")
 	}
+	if err := rejectIsolatedCustomImage(req.ImageRegistry, req.ImageTag); err != nil {
+		return nil, err
+	}
 	if err := b.ensureAvailable(); err != nil {
 		return nil, err
 	}
@@ -164,8 +177,6 @@ func (b *sandboxBackend) Create(ctx context.Context, userID int, req CreateInsta
 		GPUCount:                 req.GPUCount,
 		OSType:                   req.OSType,
 		OSVersion:                req.OSVersion,
-		ImageRegistry:            req.ImageRegistry,
-		ImageTag:                 req.ImageTag,
 		EnvironmentOverridesJSON: environmentOverridesJSON,
 		StorageClass:             strings.TrimSpace(req.StorageClass),
 		MountPath:                isolatedWorkspaceMountPath,
@@ -182,9 +193,20 @@ func (b *sandboxBackend) Create(ctx context.Context, userID int, req CreateInsta
 	var bootstrapSnapshot *models.OpenClawInjectionSnapshot
 	defer func() {
 		if cleanup {
-			_ = b.deleteSandboxObject(context.Background(), instance)
+			deleteErr := b.deleteSandboxObject(context.Background(), instance)
 			if bootstrapSnapshot != nil && s.openClawConfigService != nil {
 				_ = s.openClawConfigService.MarkSnapshotFailed(bootstrapSnapshot, fmt.Errorf("isolated create rolled back"))
+			}
+			if deleteErr != nil {
+				message := fmt.Sprintf("isolated create rollback failed to delete Sandbox; preserving instance record: %v", deleteErr)
+				instance.Status = "error"
+				instance.RuntimeErrorMessage = &message
+				instance.UpdatedAt = time.Now()
+				if updateErr := s.instanceRepo.Update(instance); updateErr != nil {
+					log.Printf("isolated create rollback failed to mark instance %d error after Sandbox delete failure: %v", instance.ID, updateErr)
+				}
+				log.Printf("isolated create rollback preserved instance %d because Sandbox delete failed: %v", instance.ID, deleteErr)
+				return
 			}
 			_ = s.instanceRepo.Delete(instance.ID)
 		}
@@ -228,7 +250,7 @@ func (b *sandboxBackend) Create(ctx context.Context, userID int, req CreateInsta
 	if err != nil {
 		return nil, err
 	}
-	image := isolatedGatewayImage(instance.Type, instance.ImageRegistry, instance.ImageTag)
+	image := isolatedGatewayImage(instance.Type)
 	sandbox, err := buildIsolatedSandboxObject(isolatedSandboxSpec{
 		Instance:       instance,
 		Name:           b.sandboxName(instance),
@@ -298,6 +320,9 @@ func (b *sandboxBackend) Start(ctx context.Context, instance *models.Instance, r
 		return b.markInstanceCreating(instance)
 	}
 	if err != nil {
+		return err
+	}
+	if err := b.refreshSandboxPodEnv(sandbox, instance, proxyURL); err != nil {
 		return err
 	}
 	if err := unstructured.SetNestedField(sandbox.Object, sandboxOperatingModeRunning, "spec", "operatingMode"); err != nil {
@@ -379,13 +404,14 @@ func (b *sandboxBackend) Status(ctx context.Context, instance *models.Instance) 
 	}
 	state := sandboxStateFromConditions(sandbox)
 	if state.Recreate {
-		if err := b.recreateSandbox(ctx, sandbox); err != nil {
+		decision, err := b.recoverFailedSandbox(ctx, sandbox, instance)
+		if err != nil {
 			return nil, err
 		}
-		state.Status = "creating"
-		state.PodStatus = "recreating"
+		state.Status = decision.Status
+		state.PodStatus = decision.PodStatus
 		state.Recreate = false
-		state.ErrorMessage = nil
+		state.ErrorMessage = decision.ErrorMessage
 	}
 	if err := b.syncInstanceStatus(instance, state); err != nil {
 		return nil, err
@@ -544,6 +570,52 @@ func (b *sandboxBackend) governedEnv(instance *models.Instance) (map[string]stri
 	return gatewayEnv, agentEnv, nil
 }
 
+func (b *sandboxBackend) refreshSandboxPodEnv(sandbox *unstructured.Unstructured, instance *models.Instance, proxyURL string) error {
+	gatewayEnv, agentEnv, err := b.governedEnv(instance)
+	if err != nil {
+		return err
+	}
+	env, err := buildIsolatedSandboxEnv(instance, isolatedBaseRuntimeEnv(instance), gatewayEnv, agentEnv, proxyURL)
+	if err != nil {
+		return err
+	}
+	renderedEnv, err := envVarsToUnstructured(env)
+	if err != nil {
+		return err
+	}
+
+	containers, ok, err := unstructured.NestedSlice(sandbox.Object, "spec", "podTemplate", "spec", "containers")
+	if err != nil {
+		return fmt.Errorf("failed to inspect isolated Sandbox containers: %w", err)
+	}
+	if !ok || len(containers) == 0 {
+		return fmt.Errorf("isolated Sandbox pod template has no containers")
+	}
+
+	targetIndex := 0
+	containerName := normalizedGatewayContainerName(instance.Type)
+	for idx, item := range containers {
+		container, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(stringField(container, "name")), containerName) {
+			targetIndex = idx
+			break
+		}
+	}
+	container, ok := containers[targetIndex].(map[string]any)
+	if !ok {
+		return fmt.Errorf("isolated Sandbox pod template container is invalid")
+	}
+	container["env"] = renderedEnv
+	containers[targetIndex] = container
+	if err := unstructured.SetNestedSlice(sandbox.Object, containers, "spec", "podTemplate", "spec", "containers"); err != nil {
+		return fmt.Errorf("failed to refresh isolated Sandbox pod env: %w", err)
+	}
+	return nil
+}
+
 func (b *sandboxBackend) recreateFromInstance(ctx context.Context, instance *models.Instance, proxyURL string) error {
 	if b.service == nil {
 		return fmt.Errorf("isolated runtime backend is not configured")
@@ -570,7 +642,7 @@ func (b *sandboxBackend) recreateFromInstance(ctx context.Context, instance *mod
 		Instance:       instance,
 		Name:           b.sandboxName(instance),
 		Namespace:      b.namespace(instance.UserID),
-		Image:          isolatedGatewayImage(instance.Type, instance.ImageRegistry, instance.ImageTag),
+		Image:          isolatedGatewayImage(instance.Type),
 		RuntimeEnv:     isolatedBaseRuntimeEnv(instance),
 		GatewayEnv:     gatewayEnv,
 		AgentEnv:       agentEnv,
@@ -590,32 +662,73 @@ func (b *sandboxBackend) recreateFromInstance(ctx context.Context, instance *mod
 	return nil
 }
 
-func (b *sandboxBackend) recreateSandbox(ctx context.Context, existing *unstructured.Unstructured) error {
-	recreated := existing.DeepCopy()
-	recreated.SetResourceVersion("")
-	recreated.SetUID(types.UID(""))
-	recreated.SetGeneration(0)
-	recreated.SetCreationTimestamp(metav1.Time{})
-	recreated.SetManagedFields(nil)
-	unstructured.RemoveNestedField(recreated.Object, "status")
-	if err := unstructured.SetNestedField(recreated.Object, sandboxOperatingModeRunning, "spec", "operatingMode"); err != nil {
-		return fmt.Errorf("failed to set recreated isolated Sandbox running mode: %w", err)
+func (b *sandboxBackend) recoverFailedSandbox(ctx context.Context, existing *unstructured.Unstructured, instance *models.Instance) (sandboxRecoveryDecision, error) {
+	namespace := existing.GetNamespace()
+	name := existing.GetName()
+	now := time.Now().UTC()
+	annotations := cloneStringMap(existing.GetAnnotations())
+	attempts, _ := strconv.Atoi(strings.TrimSpace(annotations[sandboxRecreateAttemptsAnnotation]))
+	lastAttempt := parseSandboxRecreateAttemptTime(annotations[sandboxRecreateLastAttemptAnnotation])
+
+	if attempts >= sandboxRecreateMaxAttempts {
+		message := fmt.Sprintf("isolated Sandbox recovery stopped after %d failed recreate attempts", attempts)
+		return sandboxRecoveryDecision{Status: "error", PodStatus: "recreate_limit_exceeded", ErrorMessage: &message}, nil
 	}
-	namespace := recreated.GetNamespace()
-	name := recreated.GetName()
-	if err := b.sandboxes(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete failed isolated Sandbox %s/%s: %w", namespace, name, err)
+	if attempts > 0 && !lastAttempt.IsZero() && now.Sub(lastAttempt) < sandboxRecreateCooldown {
+		return sandboxRecoveryDecision{Status: "creating", PodStatus: "recreate_cooldown"}, nil
 	}
-	if err := b.waitSandboxDeleted(ctx, namespace, name); err != nil {
-		return err
+
+	proxyURL, err := b.requireProxyURL()
+	if err != nil {
+		return sandboxRecoveryDecision{}, err
 	}
-	if _, err := b.sandboxes(namespace).Create(ctx, recreated, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("failed to recreate failed isolated Sandbox %s/%s: %w", namespace, name, err)
+	suspended := existing.DeepCopy()
+	if err := b.refreshSandboxPodEnv(suspended, instance, proxyURL); err != nil {
+		return sandboxRecoveryDecision{}, err
 	}
-	return nil
+	annotations = cloneStringMap(suspended.GetAnnotations())
+	annotations[sandboxRecreateAttemptsAnnotation] = strconv.Itoa(attempts + 1)
+	annotations[sandboxRecreateLastAttemptAnnotation] = now.Format(time.RFC3339)
+	suspended.SetAnnotations(annotations)
+	if err := unstructured.SetNestedField(suspended.Object, sandboxOperatingModeSuspended, "spec", "operatingMode"); err != nil {
+		return sandboxRecoveryDecision{}, fmt.Errorf("failed to set failed isolated Sandbox suspended mode: %w", err)
+	}
+	if _, err := b.sandboxes(namespace).Update(ctx, suspended, metav1.UpdateOptions{}); err != nil {
+		return sandboxRecoveryDecision{}, fmt.Errorf("failed to suspend failed isolated Sandbox %s/%s before recovery: %w", namespace, name, err)
+	}
+	if err := b.waitSandboxPodDeleted(ctx, namespace, name); err != nil {
+		return sandboxRecoveryDecision{}, err
+	}
+
+	running, err := b.sandboxes(namespace).Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return sandboxRecoveryDecision{}, fmt.Errorf("failed to recover isolated Sandbox %s/%s: Sandbox disappeared while suspended", namespace, name)
+	}
+	if err != nil {
+		return sandboxRecoveryDecision{}, fmt.Errorf("failed to reload isolated Sandbox %s/%s for recovery: %w", namespace, name, err)
+	}
+	if err := b.refreshSandboxPodEnv(running, instance, proxyURL); err != nil {
+		return sandboxRecoveryDecision{}, err
+	}
+	running.SetAnnotations(annotations)
+	if err := unstructured.SetNestedField(running.Object, sandboxOperatingModeRunning, "spec", "operatingMode"); err != nil {
+		return sandboxRecoveryDecision{}, fmt.Errorf("failed to set failed isolated Sandbox running mode: %w", err)
+	}
+	if _, err := b.sandboxes(namespace).Update(ctx, running, metav1.UpdateOptions{}); err != nil {
+		return sandboxRecoveryDecision{}, fmt.Errorf("failed to resume failed isolated Sandbox %s/%s: %w", namespace, name, err)
+	}
+	return sandboxRecoveryDecision{Status: "creating", PodStatus: "recreating"}, nil
 }
 
-func (b *sandboxBackend) waitSandboxDeleted(ctx context.Context, namespace, name string) error {
+func parseSandboxRecreateAttemptTime(raw string) time.Time {
+	parsed, _ := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	return parsed
+}
+
+func (b *sandboxBackend) waitSandboxPodDeleted(ctx context.Context, namespace, name string) error {
+	if b.k8sClient == nil || b.k8sClient.Clientset == nil {
+		return nil
+	}
 	timeout := b.deleteTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
@@ -629,18 +742,18 @@ func (b *sandboxBackend) waitSandboxDeleted(ctx context.Context, namespace, name
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
 	for {
-		_, err := b.sandboxes(namespace).Get(ctx, name, metav1.GetOptions{})
+		_, err := b.k8sClient.Clientset.CoreV1().Pods(namespace).Get(ctx, name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("failed waiting for isolated Sandbox deletion %s/%s: %w", namespace, name, err)
+			return fmt.Errorf("failed waiting for isolated Sandbox pod deletion %s/%s: %w", namespace, name, err)
 		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("timed out waiting for isolated Sandbox %s/%s deletion", namespace, name)
+			return fmt.Errorf("timed out waiting for isolated Sandbox pod %s/%s deletion", namespace, name)
 		case <-ticker.C:
 		}
 	}
@@ -878,20 +991,22 @@ func isolatedGatewayCommand(instanceType string) []string {
 	return []string{"/bin/sh", "-lc", "mkdir -p /workspaces /config/.openclaw && exec /usr/local/bin/openclaw gateway run --allow-unconfigured --auth token --token \"${CLAWMANAGER_INSTANCE_TOKEN}\" --bind lan --port 19090 --force --dev --verbose"}
 }
 
-func isolatedGatewayImage(instanceType string, registry, tag *string) string {
-	if registry != nil && strings.TrimSpace(*registry) != "" && (tag == nil || strings.TrimSpace(*tag) == "") {
-		return strings.TrimSpace(*registry)
+func isolatedGatewayImage(instanceType string) string {
+	if selection, ok := runtimeImageOverrideForRuntimeType(instanceType, RuntimeBackendGateway); ok {
+		return strings.TrimSpace(selection.Image)
 	}
-	defaultImage := strings.TrimSpace(defaultGatewaySystemImageSettings[strings.ToLower(strings.TrimSpace(instanceType))])
-	if strings.EqualFold(instanceType, RuntimeTypeOpenClaw) {
-		defaultImage = firstNonEmptyString(os.Getenv("OPENCLAW_RUNTIME_IMAGE"), defaultImage)
-	} else if strings.EqualFold(instanceType, RuntimeTypeHermes) {
-		defaultImage = firstNonEmptyString(os.Getenv("HERMES_RUNTIME_IMAGE"), defaultImage)
+	return strings.TrimSpace(defaultGatewaySystemImageSettings[strings.ToLower(strings.TrimSpace(instanceType))])
+}
+
+func rejectIsolatedCustomImage(registry, tag *string) error {
+	if stringPtrHasValue(registry) || stringPtrHasValue(tag) {
+		return fmt.Errorf("isolated mode can only use platform images; custom image_registry/image_tag are not allowed")
 	}
-	if registry != nil && strings.TrimSpace(*registry) != "" && tag != nil && strings.TrimSpace(*tag) != "" {
-		return fmt.Sprintf("%s/%s-lite:%s", strings.TrimRight(strings.TrimSpace(*registry), "/"), strings.ToLower(strings.TrimSpace(instanceType)), strings.TrimSpace(*tag))
-	}
-	return defaultImage
+	return nil
+}
+
+func stringPtrHasValue(value *string) bool {
+	return value != nil && strings.TrimSpace(*value) != ""
 }
 
 func isolatedResourceRequirements(instance *models.Instance) corev1.ResourceRequirements {
@@ -954,7 +1069,6 @@ func isolatedSandboxLabels(instance *models.Instance, name string) map[string]st
 		"app.kubernetes.io/name":    name,
 		"app.kubernetes.io/part-of": "clawmanager",
 		"instance-id":               strconv.Itoa(instance.ID),
-		"instance-name":             instance.Name,
 		"user-id":                   strconv.Itoa(instance.UserID),
 		"instance-type":             instance.Type,
 		"runtime-type":              RuntimeBackendGateway,
@@ -982,6 +1096,21 @@ func envMapToVars(env map[string]string) []corev1.EnvVar {
 		vars = append(vars, corev1.EnvVar{Name: key, Value: env[key]})
 	}
 	return vars
+}
+
+func envVarsToUnstructured(vars []corev1.EnvVar) ([]any, error) {
+	rendered, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&corev1.Container{Env: vars})
+	if err != nil {
+		return nil, fmt.Errorf("failed to render isolated Sandbox env: %w", err)
+	}
+	items, ok, err := unstructured.NestedSlice(rendered, "env")
+	if err != nil {
+		return nil, fmt.Errorf("failed to render isolated Sandbox env: %w", err)
+	}
+	if !ok {
+		return []any{}, nil
+	}
+	return items, nil
 }
 
 func stripDesktopEnv(env map[string]string) map[string]string {

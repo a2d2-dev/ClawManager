@@ -60,6 +60,10 @@ func HandleError(c *gin.Context, err error) {
 		Error(c, http.StatusBadRequest, errStr)
 		return
 	}
+	if strings.HasPrefix(errStr, "isolated mode can only use platform images") || strings.HasPrefix(errStr, "reserved proxy environment variable ") {
+		Error(c, http.StatusBadRequest, errStr)
+		return
+	}
 	if strings.HasPrefix(errStr, "egress_proxy_unreachable") {
 		Error(c, http.StatusServiceUnavailable, errStr)
 		return

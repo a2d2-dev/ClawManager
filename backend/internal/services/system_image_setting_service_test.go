@@ -276,6 +276,25 @@ func TestSystemImageSettingServiceGetRuntimeImageForImageFallsBackToOpenClawGate
 	}
 }
 
+func TestSystemImageSettingServiceGetRuntimeImageForRuntimeTypeSelectsGateway(t *testing.T) {
+	repo := &stubSystemImageSettingRepository{
+		items: []models.SystemImageSetting{
+			{ID: 1, InstanceType: "openclaw", RuntimeType: "desktop", DisplayName: "OpenClaw Desktop", Image: "registry/openclaw-desktop:latest", IsEnabled: true},
+			{ID: 2, InstanceType: "openclaw", RuntimeType: "gateway", DisplayName: "OpenClaw Lite", Image: "registry/openclaw-lite:latest", IsEnabled: true},
+		},
+		nextID: 2,
+	}
+	service := NewSystemImageSettingService(repo)
+
+	selection, ok := service.GetRuntimeImageForRuntimeType("openclaw", "gateway")
+	if !ok {
+		t.Fatalf("expected gateway runtime image to resolve")
+	}
+	if selection.RuntimeType != "gateway" || selection.Image != "registry/openclaw-lite:latest" {
+		t.Fatalf("gateway selection = %#v", selection)
+	}
+}
+
 func TestSystemImageSettingServiceGetRuntimeImageForImageBackfillsHermesProDefaultWhenLiteStored(t *testing.T) {
 	repo := &stubSystemImageSettingRepository{
 		items: []models.SystemImageSetting{

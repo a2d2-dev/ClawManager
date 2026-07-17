@@ -269,6 +269,8 @@ type UpdateInstanceRequest struct {
 	Name                 *string            `json:"name,omitempty" binding:"omitempty,min=3,max=50"`
 	Description          *string            `json:"description,omitempty"`
 	DesktopStreamProfile *string            `json:"desktop_stream_profile,omitempty" binding:"omitempty,oneof=low standard high"`
+	ImageRegistry        *string            `json:"image_registry,omitempty"`
+	ImageTag             *string            `json:"image_tag,omitempty"`
 	EnvironmentOverrides *map[string]string `json:"environment_overrides,omitempty"`
 }
 
@@ -745,6 +747,8 @@ func (h *InstanceHandler) UpdateInstance(c *gin.Context) {
 		Name:                 req.Name,
 		Description:          req.Description,
 		DesktopStreamProfile: req.DesktopStreamProfile,
+		ImageRegistry:        req.ImageRegistry,
+		ImageTag:             req.ImageTag,
 		EnvironmentOverrides: req.EnvironmentOverrides,
 	}
 
