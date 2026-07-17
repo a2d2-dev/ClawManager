@@ -995,7 +995,10 @@ func (s *teamService) buildTeamMemberInstanceRequestWithSecrets(team *models.Tea
 	if instanceMode == "" {
 		instanceMode = InstanceModeLite
 	}
-	runtimeBackendType, _ := RuntimeTypeForInstanceMode(instanceMode)
+	runtimeBackendType := RuntimeBackendGateway
+	if instanceMode == InstanceModePro {
+		runtimeBackendType = RuntimeBackendDesktop
+	}
 	memberEnv := s.teamMemberEnv(team, memberPlan)
 	if instanceMode == InstanceModeLite {
 		memberEnv["CLAWMANAGER_TEAM_SHARED_DIR"] = s.teamRuntimeSharedPath(team)

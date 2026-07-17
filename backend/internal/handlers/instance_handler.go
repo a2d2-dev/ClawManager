@@ -189,8 +189,8 @@ type CreateInstanceRequest struct {
 	Name                 string                       `json:"name" binding:"required,min=3,max=50"`
 	Description          *string                      `json:"description,omitempty"`
 	Type                 string                       `json:"type" binding:"required,oneof=openclaw ubuntu debian centos custom webtop hermes"`
-	Mode                 string                       `json:"mode" binding:"omitempty,oneof=lite pro"`
-	InstanceMode         string                       `json:"instance_mode" binding:"omitempty,oneof=lite pro"`
+	Mode                 string                       `json:"mode" binding:"omitempty,oneof=lite isolated pro"`
+	InstanceMode         string                       `json:"instance_mode" binding:"omitempty,oneof=lite isolated pro"`
 	RuntimeType          string                       `json:"runtime_type" binding:"omitempty,oneof=gateway desktop shell"`
 	DesktopStreamProfile string                       `json:"desktop_stream_profile,omitempty" binding:"omitempty,oneof=low standard high"`
 	CPUCores             float64                      `json:"cpu_cores" binding:"required,min=0.1,max=32"`

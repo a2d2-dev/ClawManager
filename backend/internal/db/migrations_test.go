@@ -160,3 +160,20 @@ func TestMigration037AddsTeamWorkflowLedger(t *testing.T) {
 		}
 	}
 }
+
+func TestMigration038AllowsIsolatedInstanceMode(t *testing.T) {
+	raw, err := embeddedMigrations.ReadFile("migrations/038_allow_isolated_instance_mode.sql")
+	if err != nil {
+		t.Fatalf("read migration 038: %v", err)
+	}
+	sql := string(raw)
+	for _, required := range []string{
+		"MODIFY COLUMN instance_mode",
+		"ENUM('lite', 'isolated', 'pro')",
+		"NOT NULL DEFAULT 'lite'",
+	} {
+		if !strings.Contains(sql, required) {
+			t.Fatalf("migration 038 must contain %s", required)
+		}
+	}
+}

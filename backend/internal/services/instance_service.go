@@ -108,7 +108,11 @@ func (s *instanceService) ValidateCreateRequests(userID int, requests []CreateIn
 			return fmt.Errorf("instance name already exists")
 		}
 		requestNames[normalizedName] = struct{}{}
-		if instanceModeUsesDedicatedResources(resolveCreateInstanceMode(req)) {
+		instanceMode, err := resolveCreateInstanceMode(req)
+		if err != nil {
+			return err
+		}
+		if instanceModeUsesDedicatedResources(instanceMode) {
 			requestedCPU += req.CPUCores
 			requestedMemory += req.MemoryGB
 			requestedStorage += req.DiskGB
@@ -139,8 +143,8 @@ type CreateInstanceRequest struct {
 	Name                 string              `json:"name" validate:"required,min=3,max=50"`
 	Description          *string             `json:"description,omitempty"`
 	Type                 string              `json:"type" validate:"required,oneof=openclaw ubuntu debian centos custom webtop hermes"`
-	Mode                 string              `json:"mode" validate:"omitempty,oneof=lite pro"`
-	InstanceMode         string              `json:"instance_mode" validate:"omitempty,oneof=lite pro"`
+	Mode                 string              `json:"mode" validate:"omitempty,oneof=lite isolated pro"`
+	InstanceMode         string              `json:"instance_mode" validate:"omitempty,oneof=lite isolated pro"`
 	RuntimeType          string              `json:"runtime_type" validate:"omitempty,oneof=gateway desktop shell"`
 	DesktopStreamProfile string              `json:"desktop_stream_profile,omitempty" validate:"omitempty,oneof=low standard high"`
 	CPUCores             float64             `json:"cpu_cores" validate:"required,min=0.1,max=32"`
@@ -207,6 +211,7 @@ type instanceService struct {
 	quotaRepo             repository.QuotaRepository
 	llmModelRepo          repository.LLMModelRepository
 	openClawConfigService OpenClawConfigService
+	runtimeCapabilities   RuntimeCapabilities
 	allowPrivilegedPods   bool
 	runtimePodRepo        repository.RuntimePodRepository
 	bindingRepo           repository.InstanceRuntimeBindingRepository
@@ -240,6 +245,12 @@ func WithV2RuntimeLifecycle(runtimePodRepo repository.RuntimePodRepository, bind
 		if strings.TrimSpace(workspaceRoot) != "" {
 			s.workspaceRoot = strings.TrimSpace(workspaceRoot)
 		}
+	}
+}
+
+func WithRuntimeCapabilities(capabilities RuntimeCapabilities) InstanceServiceOption {
+	return func(s *instanceService) {
+		s.runtimeCapabilities = normalizeRuntimeCapabilities(capabilities)
 	}
 }
 
@@ -293,10 +304,16 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	if quota == nil {
 		return nil, fmt.Errorf("user quota not found")
 	}
-	instanceMode := resolveCreateInstanceMode(req)
-	modeRuntimeType, _ := RuntimeTypeForInstanceMode(instanceMode)
-	if !hasExplicitCreateInstanceMode(req) && normalizeInstanceRuntimeType(req.RuntimeType) == RuntimeBackendShell {
-		modeRuntimeType = RuntimeBackendShell
+	instanceMode, err := resolveCreateInstanceMode(req)
+	if err != nil {
+		return nil, err
+	}
+	modeRuntimeType, err := resolveCreateRuntimeType(req, instanceMode)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureInstanceModeAvailable(instanceMode); err != nil {
+		return nil, err
 	}
 
 	// Check instance count limit
@@ -365,13 +382,11 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	if err := s.enforceInstanceModeLimits(ctx, instanceMode, req.CPUCores, req.MemoryGB, req.DiskGB, requestedGPU); err != nil {
 		return nil, err
 	}
-	// Create follows the same legacy V2 predicate split as persisted instance
-	// dispatch: only normalized V2 lite requests use Lite; all other inputs keep
-	// the legacy Pro fallback. instance_mode authority is deferred to issue #7.
-	if runtimeType, isV2 := NormalizeV2RuntimeType(req.Type); isV2 && instanceMode == InstanceModeLite {
-		return newLiteBackend(s).Create(ctx, userID, req, runtimeType, environmentOverridesJSON)
+	backend, ok := s.runtimeBackendForMode(instanceMode)
+	if !ok {
+		return nil, fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 	}
-	return newProBackend(s).Create(ctx, userID, req, modeRuntimeType, environmentOverridesJSON)
+	return backend.Create(ctx, userID, req, instanceMode, modeRuntimeType, environmentOverridesJSON)
 }
 
 // GetByID gets an instance by ID
@@ -1186,27 +1201,65 @@ func instanceUsesDesktopRuntime(instance *models.Instance) bool {
 	return normalizeInstanceRuntimeType(instance.RuntimeType) == RuntimeBackendDesktop
 }
 
-func resolveCreateInstanceMode(req CreateInstanceRequest) string {
+func resolveCreateInstanceMode(req CreateInstanceRequest) (string, error) {
 	if mode, ok := NormalizeInstanceMode(req.Mode); ok {
-		return mode
+		return mode, nil
+	}
+	if strings.TrimSpace(req.Mode) != "" {
+		return "", fmt.Errorf("unsupported instance mode %q", req.Mode)
 	}
 	if mode, ok := NormalizeInstanceMode(req.InstanceMode); ok {
-		return mode
+		return mode, nil
 	}
-	if strings.TrimSpace(req.RuntimeType) == "" {
-		return InstanceModeLite
+	if strings.TrimSpace(req.InstanceMode) != "" {
+		return "", fmt.Errorf("unsupported instance mode %q", req.InstanceMode)
 	}
-	return InstanceModeForRuntimeType(normalizeInstanceRuntimeType(req.RuntimeType))
+	runtimeType, err := resolveRequestedRuntimeType(req.RuntimeType)
+	if err != nil {
+		return "", err
+	}
+	if runtimeType == RuntimeBackendDesktop || runtimeType == RuntimeBackendShell {
+		return InstanceModePro, nil
+	}
+	return InstanceModeLite, nil
 }
 
-func hasExplicitCreateInstanceMode(req CreateInstanceRequest) bool {
-	if _, ok := NormalizeInstanceMode(req.Mode); ok {
-		return true
+func resolveCreateRuntimeType(req CreateInstanceRequest, instanceMode string) (string, error) {
+	runtimeType, err := resolveRequestedRuntimeType(req.RuntimeType)
+	if err != nil {
+		return "", err
 	}
-	if _, ok := NormalizeInstanceMode(req.InstanceMode); ok {
-		return true
+	if runtimeType != "" {
+		if instanceMode == InstanceModeIsolated && runtimeType != RuntimeBackendGateway {
+			return "", fmt.Errorf("isolated instance mode requires runtime_type=gateway")
+		}
+		return runtimeType, nil
 	}
-	return false
+	switch instanceMode {
+	case InstanceModeLite, InstanceModeIsolated:
+		return RuntimeBackendGateway, nil
+	case InstanceModePro:
+		return RuntimeBackendDesktop, nil
+	default:
+		return "", fmt.Errorf("unsupported instance mode %q", instanceMode)
+	}
+}
+
+func resolveRequestedRuntimeType(runtimeType string) (string, error) {
+	raw := strings.TrimSpace(runtimeType)
+	if raw == "" {
+		return "", nil
+	}
+	switch strings.ToLower(raw) {
+	case RuntimeBackendGateway:
+		return RuntimeBackendGateway, nil
+	case RuntimeBackendShell:
+		return RuntimeBackendShell, nil
+	case RuntimeBackendDesktop:
+		return RuntimeBackendDesktop, nil
+	default:
+		return "", fmt.Errorf("unsupported runtime type %q", runtimeType)
+	}
 }
 
 func modeForExistingInstance(instance *models.Instance) string {
@@ -1216,12 +1269,37 @@ func modeForExistingInstance(instance *models.Instance) string {
 	if mode, ok := NormalizeInstanceMode(instance.InstanceMode); ok {
 		return mode
 	}
-	return InstanceModeForRuntimeType(normalizeInstanceRuntimeType(instance.RuntimeType))
+	if strings.TrimSpace(instance.InstanceMode) == "" {
+		return InstanceModeLite
+	}
+	return strings.TrimSpace(instance.InstanceMode)
 }
 
 func instanceModeUsesDedicatedResources(mode string) bool {
 	normalized, ok := NormalizeInstanceMode(mode)
-	return ok && normalized == InstanceModePro
+	return ok && normalized != InstanceModeLite
+}
+
+func (s *instanceService) ensureInstanceModeAvailable(mode string) error {
+	normalizedMode, ok := NormalizeInstanceMode(mode)
+	if !ok {
+		return fmt.Errorf("unsupported instance mode %q", mode)
+	}
+	if normalizedMode != InstanceModeIsolated {
+		return nil
+	}
+	capability := normalizeRuntimeCapabilities(s.runtimeCapabilities).CapabilityForMode(normalizedMode)
+	if capability.Available {
+		return nil
+	}
+	reason := strings.TrimSpace(capability.Reason)
+	if reason == "" {
+		reason = "mode unavailable: isolated runtime requires agent-sandbox Sandbox CRD"
+	}
+	if !strings.Contains(strings.ToLower(reason), "mode unavailable") {
+		reason = "mode unavailable: " + reason
+	}
+	return fmt.Errorf("%s", reason)
 }
 
 func (s *instanceService) enforceInstanceModeLimits(ctx context.Context, mode string, cpuCores float64, memoryGB, storageGB, gpuCount int) error {

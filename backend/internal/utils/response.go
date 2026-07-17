@@ -56,6 +56,10 @@ func HandleError(c *gin.Context, err error) {
 		Error(c, http.StatusBadRequest, errStr)
 		return
 	}
+	if strings.HasPrefix(errStr, "mode unavailable:") || strings.HasPrefix(errStr, "unsupported instance mode") || strings.HasPrefix(errStr, "unsupported runtime type") || strings.HasPrefix(errStr, "isolated instance mode requires") {
+		Error(c, http.StatusBadRequest, errStr)
+		return
+	}
 
 	switch errStr {
 	case "username already exists", "email already exists", "instance name already exists", "team name already exists", "openclaw config resource key already exists", "team task message id already exists":

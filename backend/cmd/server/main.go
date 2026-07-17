@@ -51,6 +51,13 @@ func main() {
 	}
 
 	// Initialize repositories
+	runtimeCapabilities := services.ProbeRuntimeCapabilities(context.Background())
+	if capability, ok := runtimeCapabilities.InstanceModes[services.InstanceModeIsolated]; ok && capability.Available {
+		log.Printf("Runtime capability detected: isolated mode available")
+	} else if ok {
+		log.Printf("Runtime capability detected: isolated mode unavailable: %s", capability.Reason)
+	}
+
 	userRepo := repository.NewUserRepository(database)
 	quotaRepo := repository.NewQuotaRepository(database)
 	instanceRepo := repository.NewInstanceRepository(database)
@@ -116,7 +123,9 @@ func main() {
 		openClawConfigService,
 		services.WithPrivilegedInstancePods(cfg.Kubernetes.Runtime.Pod.Privileged),
 		services.WithV2RuntimeLifecycle(runtimePodRepo, bindingRepo, runtimeAgentClient, cfg.Runtime.WorkspaceRoot),
+		services.WithRuntimeCapabilities(runtimeCapabilities),
 	)
+	runtimeCapabilityService := services.NewRuntimeCapabilityService(runtimeCapabilities)
 	instanceAgentService := services.NewInstanceAgentService(instanceRepo, instanceAgentRepo, instanceDesiredStateRepo, instanceRuntimeStatusRepo, instanceCommandRepo)
 	instanceRuntimeStatusService := services.NewInstanceRuntimeStatusService(instanceRuntimeStatusRepo, instanceAgentRepo, instanceDesiredStateRepo)
 	instanceCommandService := services.NewInstanceCommandService(instanceCommandRepo, instanceRuntimeStatusRepo, instanceDesiredStateRepo, skillRepo)
@@ -174,6 +183,7 @@ func main() {
 	workspaceFileHandler := handlers.NewWorkspaceFileHandler(instanceService, workspaceFileService, runtimeWorkspaceFileService)
 	workspaceFileHandler.SetSkillRepository(skillRepo)
 	runtimeAgentHandler := handlers.NewRuntimeAgentHandler(cfg.Runtime, runtimePodRepo, bindingRepo, instanceRepo, runtimeEvents)
+	runtimeCapabilityHandler := handlers.NewRuntimeCapabilityHandler(runtimeCapabilityService)
 
 	// Initialize WebSocket hub and handler
 	wsHub := services.GetHub()
@@ -335,6 +345,14 @@ func main() {
 			users.GET("/:id", userHandler.GetUser)
 			users.PUT("/:id", userHandler.UpdateUser)
 			users.GET("/:id/quota", userHandler.GetUserQuota)
+		}
+
+		// Runtime capability routes (authenticated)
+		runtimeCapabilitiesAPI := api.Group("/runtime-capabilities")
+		runtimeCapabilitiesAPI.Use(middleware.Auth())
+		runtimeCapabilitiesAPI.Use(middleware.SetUserInfo(userRepo))
+		{
+			runtimeCapabilitiesAPI.GET("", runtimeCapabilityHandler.Get)
 		}
 
 		// Instance routes (authenticated)

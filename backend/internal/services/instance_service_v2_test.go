@@ -250,6 +250,119 @@ func TestInstanceServiceCreateProEnforcesPerInstanceResourceQuota(t *testing.T) 
 	}
 }
 
+func TestInstanceServiceCreateRejectsInvalidInstanceMode(t *testing.T) {
+	instanceRepo := newV2LifecycleInstanceRepo()
+	service := &instanceService{
+		instanceRepo: instanceRepo,
+		quotaRepo:    v2LifecycleQuotaRepo{},
+	}
+
+	_, err := service.Create(45, CreateInstanceRequest{
+		Name:      "Bad Mode",
+		Type:      "openclaw",
+		Mode:      "sandbox",
+		CPUCores:  2,
+		MemoryGB:  4,
+		DiskGB:    20,
+		OSType:    "openclaw",
+		OSVersion: "latest",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported instance mode") {
+		t.Fatalf("Create invalid mode error = %v, want unsupported instance mode", err)
+	}
+	if len(instanceRepo.created) != 0 {
+		t.Fatalf("invalid mode must not create records, got %#v", instanceRepo.created)
+	}
+}
+
+func TestInstanceServiceCreateIsolatedUnavailableFailsLoudly(t *testing.T) {
+	instanceRepo := newV2LifecycleInstanceRepo()
+	service := &instanceService{
+		instanceRepo: instanceRepo,
+		quotaRepo:    v2LifecycleQuotaRepo{},
+	}
+
+	_, err := service.Create(45, CreateInstanceRequest{
+		Name:        "Isolated Gateway",
+		Type:        "openclaw",
+		Mode:        InstanceModeIsolated,
+		RuntimeType: RuntimeBackendGateway,
+		CPUCores:    2,
+		MemoryGB:    4,
+		DiskGB:      20,
+		OSType:      "openclaw",
+		OSVersion:   "latest",
+	})
+	if err == nil || !strings.Contains(err.Error(), "mode unavailable") || !strings.Contains(err.Error(), AgentSandboxCRDName) {
+		t.Fatalf("Create isolated unavailable error = %v, want explicit mode unavailable CRD error", err)
+	}
+	if len(instanceRepo.created) != 0 {
+		t.Fatalf("unavailable isolated mode must not create records, got %#v", instanceRepo.created)
+	}
+}
+
+func TestInstanceServiceCreateIsolatedAvailableFailsUntilBackendDelivered(t *testing.T) {
+	instanceRepo := newV2LifecycleInstanceRepo()
+	service := &instanceService{
+		instanceRepo:        instanceRepo,
+		quotaRepo:           v2LifecycleQuotaRepo{},
+		runtimeCapabilities: isolatedAvailableCapabilities(),
+	}
+
+	_, err := service.Create(45, CreateInstanceRequest{
+		Name:        "Isolated Gateway",
+		Type:        "openclaw",
+		Mode:        InstanceModeIsolated,
+		RuntimeType: RuntimeBackendGateway,
+		CPUCores:    2,
+		MemoryGB:    4,
+		DiskGB:      20,
+		OSType:      "openclaw",
+		OSVersion:   "latest",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not delivered yet") || !strings.Contains(err.Error(), "#8") {
+		t.Fatalf("Create isolated with capability error = %v, want explicit #8 backend error", err)
+	}
+	if len(instanceRepo.created) != 0 {
+		t.Fatalf("isolated backend gate must not create records, got %#v", instanceRepo.created)
+	}
+}
+
+func TestInstanceServiceStartIsolatedDispatchDoesNotFallback(t *testing.T) {
+	instanceRepo := newV2LifecycleInstanceRepo()
+	instanceRepo.byID[77] = &models.Instance{
+		ID:           77,
+		UserID:       45,
+		Type:         "openclaw",
+		RuntimeType:  RuntimeBackendGateway,
+		InstanceMode: InstanceModeIsolated,
+		Status:       "stopped",
+		CPUCores:     2,
+		MemoryGB:     4,
+		DiskGB:       20,
+	}
+	service := &instanceService{
+		instanceRepo:        instanceRepo,
+		runtimeCapabilities: isolatedAvailableCapabilities(),
+	}
+
+	err := service.Start(77)
+	if err == nil || !strings.Contains(err.Error(), "not delivered yet") || !strings.Contains(err.Error(), "#8") {
+		t.Fatalf("Start isolated error = %v, want explicit #8 backend error", err)
+	}
+	if _, ok := instanceRepo.runtimeStates[77]; ok {
+		t.Fatalf("isolated dispatch must not update lite runtime state: %#v", instanceRepo.runtimeStates[77])
+	}
+}
+
+func isolatedAvailableCapabilities() RuntimeCapabilities {
+	return normalizeRuntimeCapabilities(RuntimeCapabilities{
+		InstanceModes: map[string]RuntimeModeCapability{
+			InstanceModeIsolated: {Available: true},
+		},
+	})
+}
+
 func assertDirMode(t *testing.T, dir string, want os.FileMode) {
 	t.Helper()
 	info, err := os.Stat(dir)

@@ -21,10 +21,13 @@ func newProBackend(s *instanceService) *proBackend {
 	return &proBackend{service: s}
 }
 
-func (b *proBackend) Create(ctx context.Context, userID int, req CreateInstanceRequest, backendRuntimeType string, environmentOverridesJSON *string) (*models.Instance, error) {
+func (b *proBackend) Create(ctx context.Context, userID int, req CreateInstanceRequest, instanceMode string, backendRuntimeType string, environmentOverridesJSON *string) (*models.Instance, error) {
 	s := b.service
 	if s == nil {
 		return nil, fmt.Errorf("pro runtime backend is not configured")
+	}
+	if instanceMode != InstanceModePro {
+		return nil, fmt.Errorf("pro runtime backend cannot create %s instances", instanceMode)
 	}
 	runtimeConfig := buildRuntimeConfig(req.Type, req.OSType, req.OSVersion, req.ImageRegistry, req.ImageTag)
 	backendRuntimeType = strings.TrimSpace(backendRuntimeType)
@@ -62,7 +65,7 @@ func (b *proBackend) Create(ctx context.Context, userID int, req CreateInstanceR
 		Description:              req.Description,
 		Type:                     req.Type,
 		RuntimeType:              runtimeType,
-		InstanceMode:             InstanceModeForRuntimeType(runtimeType),
+		InstanceMode:             instanceMode,
 		Status:                   "creating",
 		CPUCores:                 req.CPUCores,
 		MemoryGB:                 req.MemoryGB,

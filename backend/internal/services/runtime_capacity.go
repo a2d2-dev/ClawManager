@@ -10,8 +10,9 @@ const (
 	RuntimeTypeOpenClaw = "openclaw"
 	RuntimeTypeHermes   = "hermes"
 
-	InstanceModeLite = "lite"
-	InstanceModePro  = "pro"
+	InstanceModeLite     = "lite"
+	InstanceModeIsolated = "isolated"
+	InstanceModePro      = "pro"
 
 	RuntimeBackendGateway = "gateway"
 	RuntimeBackendDesktop = "desktop"
@@ -38,29 +39,13 @@ func NormalizeInstanceMode(mode string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case InstanceModeLite:
 		return InstanceModeLite, true
+	case InstanceModeIsolated:
+		return InstanceModeIsolated, true
 	case InstanceModePro:
 		return InstanceModePro, true
 	default:
 		return "", false
 	}
-}
-
-func RuntimeTypeForInstanceMode(mode string) (string, bool) {
-	normalized, ok := NormalizeInstanceMode(mode)
-	if !ok {
-		return "", false
-	}
-	if normalized == InstanceModeLite {
-		return RuntimeBackendGateway, true
-	}
-	return RuntimeBackendDesktop, true
-}
-
-func InstanceModeForRuntimeType(runtimeType string) string {
-	if strings.EqualFold(strings.TrimSpace(runtimeType), RuntimeBackendGateway) {
-		return InstanceModeLite
-	}
-	return InstanceModePro
 }
 
 func RuntimeWorkspacePath(runtimeType string, userID int, instanceID int) string {
