@@ -60,6 +60,14 @@ func HandleError(c *gin.Context, err error) {
 		Error(c, http.StatusBadRequest, errStr)
 		return
 	}
+	if strings.HasPrefix(errStr, "isolated mode can only use platform images") || strings.HasPrefix(errStr, "reserved proxy environment variable ") {
+		Error(c, http.StatusBadRequest, errStr)
+		return
+	}
+	if strings.HasPrefix(errStr, "egress_proxy_unreachable") {
+		Error(c, http.StatusServiceUnavailable, errStr)
+		return
+	}
 
 	switch errStr {
 	case "username already exists", "email already exists", "instance name already exists", "team name already exists", "openclaw config resource key already exists", "team task message id already exists":

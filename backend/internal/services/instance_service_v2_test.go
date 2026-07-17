@@ -301,7 +301,35 @@ func TestInstanceServiceCreateIsolatedUnavailableFailsLoudly(t *testing.T) {
 	}
 }
 
-func TestInstanceServiceCreateIsolatedAvailableFailsUntilBackendDelivered(t *testing.T) {
+func TestInstanceServiceCreateIsolatedEnforcesModeLimitBeforeBackend(t *testing.T) {
+	t.Setenv("CLAWMANAGER_ISOLATED_MAX_CPU_CORES", "1")
+	instanceRepo := newV2LifecycleInstanceRepo()
+	service := &instanceService{
+		instanceRepo:        instanceRepo,
+		quotaRepo:           v2LifecycleQuotaRepo{},
+		runtimeCapabilities: isolatedAvailableCapabilities(),
+	}
+
+	_, err := service.Create(45, CreateInstanceRequest{
+		Name:        "Isolated Too Large",
+		Type:        "openclaw",
+		Mode:        InstanceModeIsolated,
+		RuntimeType: RuntimeBackendGateway,
+		CPUCores:    2,
+		MemoryGB:    4,
+		DiskGB:      20,
+		OSType:      "openclaw",
+		OSVersion:   "latest",
+	})
+	if err == nil || !strings.Contains(err.Error(), "isolated CPU cores exceed mode limit") {
+		t.Fatalf("Create isolated mode limit error = %v, want isolated CPU limit failure", err)
+	}
+	if len(instanceRepo.created) != 0 {
+		t.Fatalf("mode limit must reject before backend create, got %#v", instanceRepo.created)
+	}
+}
+
+func TestInstanceServiceCreateIsolatedAvailableRequiresSandboxDynamicClient(t *testing.T) {
 	instanceRepo := newV2LifecycleInstanceRepo()
 	service := &instanceService{
 		instanceRepo:        instanceRepo,
@@ -320,11 +348,11 @@ func TestInstanceServiceCreateIsolatedAvailableFailsUntilBackendDelivered(t *tes
 		OSType:      "openclaw",
 		OSVersion:   "latest",
 	})
-	if err == nil || !strings.Contains(err.Error(), "not delivered yet") || !strings.Contains(err.Error(), "#8") {
-		t.Fatalf("Create isolated with capability error = %v, want explicit #8 backend error", err)
+	if err == nil || !strings.Contains(err.Error(), "mode unavailable") || !strings.Contains(err.Error(), "Sandbox dynamic client") {
+		t.Fatalf("Create isolated with capability error = %v, want explicit dynamic client unavailable error", err)
 	}
 	if len(instanceRepo.created) != 0 {
-		t.Fatalf("isolated backend gate must not create records, got %#v", instanceRepo.created)
+		t.Fatalf("isolated unavailable backend must not create records, got %#v", instanceRepo.created)
 	}
 }
 
@@ -347,8 +375,8 @@ func TestInstanceServiceStartIsolatedDispatchDoesNotFallback(t *testing.T) {
 	}
 
 	err := service.Start(77)
-	if err == nil || !strings.Contains(err.Error(), "not delivered yet") || !strings.Contains(err.Error(), "#8") {
-		t.Fatalf("Start isolated error = %v, want explicit #8 backend error", err)
+	if err == nil || !strings.Contains(err.Error(), "mode unavailable") || !strings.Contains(err.Error(), "Sandbox dynamic client") {
+		t.Fatalf("Start isolated error = %v, want explicit dynamic client unavailable error", err)
 	}
 	if _, ok := instanceRepo.runtimeStates[77]; ok {
 		t.Fatalf("isolated dispatch must not update lite runtime state: %#v", instanceRepo.runtimeStates[77])
@@ -850,6 +878,9 @@ type v2LifecycleInstanceRepo struct {
 	nextID        int
 	deleteErr     error
 	beforeDelete  func(int)
+	updateCalls   int
+	failUpdateAt  int
+	updateErr     error
 }
 
 type v2RuntimeStateRecord struct {
@@ -977,6 +1008,12 @@ func (r *v2LifecycleInstanceRepo) UpdateWorkspaceUsage(context.Context, int, int
 }
 
 func (r *v2LifecycleInstanceRepo) Update(instance *models.Instance) error {
+	r.updateCalls++
+	if r.updateErr != nil && r.failUpdateAt > 0 && r.updateCalls == r.failUpdateAt {
+		err := r.updateErr
+		r.updateErr = nil
+		return err
+	}
 	copy := *instance
 	r.byID[instance.ID] = &copy
 	r.updated = append(r.updated, copy)

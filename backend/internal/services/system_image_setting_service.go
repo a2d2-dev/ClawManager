@@ -70,6 +70,7 @@ type RuntimeImageConfig struct {
 type RuntimeImageSettingsProvider interface {
 	GetRuntimeImage(instanceType string) (RuntimeImageConfig, bool)
 	GetRuntimeImageForImage(instanceType, image string) (RuntimeImageConfig, bool)
+	GetRuntimeImageForRuntimeType(instanceType, runtimeType string) (RuntimeImageConfig, bool)
 }
 
 var runtimeImageSettingsProvider RuntimeImageSettingsProvider
@@ -86,6 +87,7 @@ type SystemImageSettingService interface {
 	DisableType(instanceType string) error
 	GetRuntimeImage(instanceType string) (RuntimeImageConfig, bool)
 	GetRuntimeImageForImage(instanceType, image string) (RuntimeImageConfig, bool)
+	GetRuntimeImageForRuntimeType(instanceType, runtimeType string) (RuntimeImageConfig, bool)
 }
 
 type systemImageSettingService struct {
@@ -280,6 +282,41 @@ func (s *systemImageSettingService) GetRuntimeImageForImage(instanceType, image 
 	return RuntimeImageConfig{}, false
 }
 
+func (s *systemImageSettingService) GetRuntimeImageForRuntimeType(instanceType, runtimeType string) (RuntimeImageConfig, bool) {
+	normalizedType := strings.TrimSpace(strings.ToLower(instanceType))
+	normalizedRuntimeType := normalizeSystemImageRuntimeType(runtimeType)
+	if normalizedType == "" || normalizedRuntimeType == "" {
+		return RuntimeImageConfig{}, false
+	}
+
+	items, err := s.repo.ListByInstanceType(normalizedType)
+	if err != nil {
+		return RuntimeImageConfig{}, false
+	}
+
+	if len(items) == 0 {
+		for _, item := range defaultSystemImagePresetsForType(normalizedType) {
+			image := strings.TrimSpace(item.Image)
+			if item.IsEnabled && normalizeSystemImageRuntimeType(item.RuntimeType) == normalizedRuntimeType && image != "" {
+				return RuntimeImageConfig{Image: image, RuntimeType: normalizedRuntimeType}, true
+			}
+		}
+		return RuntimeImageConfig{}, false
+	}
+
+	for _, item := range enabledSystemImageSettingsForType(normalizedType, items) {
+		image := strings.TrimSpace(item.Image)
+		if image != "" && normalizeSystemImageRuntimeType(item.RuntimeType) == normalizedRuntimeType {
+			return RuntimeImageConfig{
+				Image:       image,
+				RuntimeType: normalizedRuntimeType,
+			}, true
+		}
+	}
+
+	return RuntimeImageConfig{}, false
+}
+
 func runtimeImageOverride(instanceType string) (RuntimeImageConfig, bool) {
 	if runtimeImageSettingsProvider == nil {
 		return RuntimeImageConfig{}, false
@@ -292,6 +329,13 @@ func runtimeImageOverrideForImage(instanceType, image string) (RuntimeImageConfi
 		return RuntimeImageConfig{}, false
 	}
 	return runtimeImageSettingsProvider.GetRuntimeImageForImage(instanceType, image)
+}
+
+func runtimeImageOverrideForRuntimeType(instanceType, runtimeType string) (RuntimeImageConfig, bool) {
+	if runtimeImageSettingsProvider == nil {
+		return RuntimeImageConfig{}, false
+	}
+	return runtimeImageSettingsProvider.GetRuntimeImageForRuntimeType(instanceType, runtimeType)
 }
 
 func displayNameForSystemImageType(instanceType string) string {

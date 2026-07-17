@@ -43,6 +43,14 @@ func (s *staticRuntimeCapabilityService) GetRuntimeCapabilities(ctx context.Cont
 func ProbeRuntimeCapabilities(ctx context.Context) RuntimeCapabilities {
 	capabilities := defaultRuntimeCapabilities()
 	capabilities.InstanceModes[InstanceModeIsolated] = probeAgentSandboxCapability(ctx)
+	if capabilities.InstanceModes[InstanceModeIsolated].Available {
+		if proxyURL, ok := defaultEgressProxyURL(); !ok || strings.TrimSpace(proxyURL) == "" {
+			capabilities.InstanceModes[InstanceModeIsolated] = RuntimeModeCapability{
+				Available: false,
+				Reason:    "mode unavailable: isolated runtime requires a computable egress proxy URL",
+			}
+		}
+	}
 	return capabilities
 }
 

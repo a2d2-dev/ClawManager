@@ -131,13 +131,7 @@ func withInstanceProxyEnv(instanceType string, instanceID int, env map[string]st
 	}
 
 	if proxyURL, ok := defaultEgressProxyURL(); ok {
-		noProxy := defaultNoProxyList()
-		merged["HTTP_PROXY"] = proxyURL
-		merged["HTTPS_PROXY"] = proxyURL
-		merged["http_proxy"] = proxyURL
-		merged["https_proxy"] = proxyURL
-		merged["NO_PROXY"] = noProxy
-		merged["no_proxy"] = noProxy
+		merged = mergeEnvMaps(merged, proxyEnvForURL(proxyURL))
 	}
 
 	if usesWebtopImage(instanceType) {
@@ -145,6 +139,18 @@ func withInstanceProxyEnv(instanceType string, instanceID int, env map[string]st
 	}
 
 	return merged
+}
+
+func proxyEnvForURL(proxyURL string) map[string]string {
+	noProxy := defaultNoProxyList()
+	return map[string]string{
+		"HTTP_PROXY":  proxyURL,
+		"HTTPS_PROXY": proxyURL,
+		"http_proxy":  proxyURL,
+		"https_proxy": proxyURL,
+		"NO_PROXY":    noProxy,
+		"no_proxy":    noProxy,
+	}
 }
 
 func usesWebtopImage(instanceType string) bool {

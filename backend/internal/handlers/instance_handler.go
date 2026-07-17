@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -164,6 +166,33 @@ func (h *InstanceHandler) Shutdown() {
 	}
 }
 
+func bindPublicInstanceJSON(c *gin.Context, dest interface{}) bool {
+	raw, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, "invalid request body")
+		return false
+	}
+	c.Request.Body = io.NopCloser(bytes.NewReader(raw))
+	if publicInstancePayloadHasPlacement(raw) {
+		utils.Error(c, http.StatusBadRequest, "placement is not supported in public instance requests")
+		return false
+	}
+	if err := c.ShouldBindJSON(dest); err != nil {
+		utils.ValidationError(c, err)
+		return false
+	}
+	return true
+}
+
+func publicInstancePayloadHasPlacement(raw []byte) bool {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return false
+	}
+	_, exists := payload["placement"]
+	return exists
+}
+
 type InstanceRuntimeDetailsResponse struct {
 	Runtime  *services.InstanceRuntimeStatusPayload `json:"runtime,omitempty"`
 	Agent    *services.InstanceAgentPayload         `json:"agent,omitempty"`
@@ -265,9 +294,12 @@ type BatchDeleteLiteInstancesResponse struct {
 
 // UpdateInstanceRequest represents an update instance request
 type UpdateInstanceRequest struct {
-	Name                 *string `json:"name,omitempty" binding:"omitempty,min=3,max=50"`
-	Description          *string `json:"description,omitempty"`
-	DesktopStreamProfile *string `json:"desktop_stream_profile,omitempty" binding:"omitempty,oneof=low standard high"`
+	Name                 *string            `json:"name,omitempty" binding:"omitempty,min=3,max=50"`
+	Description          *string            `json:"description,omitempty"`
+	DesktopStreamProfile *string            `json:"desktop_stream_profile,omitempty" binding:"omitempty,oneof=low standard high"`
+	ImageRegistry        *string            `json:"image_registry,omitempty"`
+	ImageTag             *string            `json:"image_tag,omitempty"`
+	EnvironmentOverrides *map[string]string `json:"environment_overrides,omitempty"`
 }
 
 // ListInstancesRequest represents a list instances request
@@ -346,8 +378,7 @@ func (h *InstanceHandler) CreateInstance(c *gin.Context) {
 	userID, _ := c.Get("userID")
 
 	var req CreateInstanceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.ValidationError(c, err)
+	if !bindPublicInstanceJSON(c, &req) {
 		return
 	}
 
@@ -733,8 +764,7 @@ func (h *InstanceHandler) UpdateInstance(c *gin.Context) {
 	}
 
 	var req UpdateInstanceRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.ValidationError(c, err)
+	if !bindPublicInstanceJSON(c, &req) {
 		return
 	}
 
@@ -742,6 +772,9 @@ func (h *InstanceHandler) UpdateInstance(c *gin.Context) {
 		Name:                 req.Name,
 		Description:          req.Description,
 		DesktopStreamProfile: req.DesktopStreamProfile,
+		ImageRegistry:        req.ImageRegistry,
+		ImageTag:             req.ImageTag,
+		EnvironmentOverrides: req.EnvironmentOverrides,
 	}
 
 	if err := h.instanceService.Update(id, updateReq); err != nil {

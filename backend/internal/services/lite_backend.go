@@ -72,7 +72,7 @@ func (s *instanceService) runtimeBackendForMode(mode string) (RuntimeBackend, bo
 	case InstanceModeLite:
 		return newLiteBackend(s), true
 	case InstanceModeIsolated:
-		return newIsolatedGateBackend(s), true
+		return newSandboxBackend(s), true
 	case InstanceModePro:
 		return newProBackend(s), true
 	default:
