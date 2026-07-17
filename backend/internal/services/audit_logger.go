@@ -24,6 +24,9 @@ const (
 	AuditEventAgentCommandCompleted   = "agent.command.completed"
 	AuditEventSkillInstallRequested   = "skill.install.requested"
 	AuditEventSkillUninstallRequested = "skill.uninstall.requested"
+	AuditEventSandboxReady            = "sandbox.ready"
+	AuditEventSandboxFinished         = "sandbox.finished"
+	AuditEventSandboxRecreated        = "sandbox.recreated"
 
 	AuditOutcomeSuccess = "success"
 	AuditOutcomeRefused = "refused"
