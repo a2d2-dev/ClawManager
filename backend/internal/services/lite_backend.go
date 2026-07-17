@@ -79,7 +79,8 @@ func (s *instanceService) runtimeBackendForInstance(instance *models.Instance) (
 	if !ok {
 		return nil, "", false
 	}
-	backend, ok := s.runtimeBackendForMode(modeForExistingInstance(instance))
+	// Dispatch derives mode from runtime_type to preserve pre-refactor behavior; mode authority work is tracked in issue #7.
+	backend, ok := s.runtimeBackendForMode(InstanceModeForRuntimeType(normalizeInstanceRuntimeType(instance.RuntimeType)))
 	if !ok {
 		return nil, "", false
 	}
