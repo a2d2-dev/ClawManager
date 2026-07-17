@@ -85,15 +85,21 @@ type instanceAgentService struct {
 	desiredStateRepo repository.InstanceDesiredStateRepository
 	runtimeRepo      repository.InstanceRuntimeStatusRepository
 	commandRepo      repository.InstanceCommandRepository
+	auditLogger      AuditLogger
 }
 
-func NewInstanceAgentService(instanceRepo repository.InstanceRepository, agentRepo repository.InstanceAgentRepository, desiredStateRepo repository.InstanceDesiredStateRepository, runtimeRepo repository.InstanceRuntimeStatusRepository, commandRepo repository.InstanceCommandRepository) InstanceAgentService {
+func NewInstanceAgentService(instanceRepo repository.InstanceRepository, agentRepo repository.InstanceAgentRepository, desiredStateRepo repository.InstanceDesiredStateRepository, runtimeRepo repository.InstanceRuntimeStatusRepository, commandRepo repository.InstanceCommandRepository, auditLoggers ...AuditLogger) InstanceAgentService {
+	auditLogger := NewAuditLoggerFromEnv()
+	if len(auditLoggers) > 0 {
+		auditLogger = auditLoggers[0]
+	}
 	return &instanceAgentService{
 		instanceRepo:     instanceRepo,
 		agentRepo:        agentRepo,
 		desiredStateRepo: desiredStateRepo,
 		runtimeRepo:      runtimeRepo,
 		commandRepo:      commandRepo,
+		auditLogger:      auditLogger,
 	}
 }
 
@@ -182,6 +188,20 @@ func (s *instanceAgentService) Register(bootstrapToken string, req AgentRegister
 	if _, err := s.ensureRuntimeStatus(instance.ID); err != nil {
 		return nil, err
 	}
+
+	emitAudit(s.auditLogger, AuditLogEvent{
+		Event:        AuditEventAgentRegistered,
+		InstanceMode: auditModeForExistingInstance(instance),
+		InstanceID:   auditIntPtr(instance.ID),
+		UserID:       auditIntPtr(instance.UserID),
+		Context: map[string]interface{}{
+			"agent_id":          strings.TrimSpace(req.AgentID),
+			"agent_version":     strings.TrimSpace(req.AgentVersion),
+			"protocol_version":  strings.TrimSpace(req.ProtocolVersion),
+			"capability_count":  len(req.Capabilities),
+			"client_ip_present": strings.TrimSpace(clientIP) != "",
+		},
+	})
 
 	return &AgentRegisterResponse{
 		SessionToken:               sessionToken,

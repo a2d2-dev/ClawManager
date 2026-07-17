@@ -5133,6 +5133,8 @@ func (s *teamRepositoryStub) ConfirmWorkItemResult(item *models.TeamWorkItem, ev
 	return nil
 }
 func (s *teamRepositoryStub) ListPendingEventOutbox(now time.Time, limit int) ([]models.TeamEventOutbox, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	result := make([]models.TeamEventOutbox, 0)
 	for _, row := range s.outboxRows {
 		if row.Status == "pending" && !row.AvailableAt.After(now) {
@@ -5148,6 +5150,8 @@ func (s *teamRepositoryStub) CreateEventOutbox(outbox *models.TeamEventOutbox) e
 	if outbox == nil {
 		return nil
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for idx := range s.outboxRows {
 		if s.outboxRows[idx].TeamID == outbox.TeamID && s.outboxRows[idx].MessageID == outbox.MessageID {
 			return nil
@@ -5160,6 +5164,8 @@ func (s *teamRepositoryStub) CreateEventOutbox(outbox *models.TeamEventOutbox) e
 	return nil
 }
 func (s *teamRepositoryStub) MarkEventOutboxDelivered(id int, deliveredAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for idx := range s.outboxRows {
 		if s.outboxRows[idx].ID == id {
 			s.outboxRows[idx].Status = "delivered"
@@ -5169,6 +5175,8 @@ func (s *teamRepositoryStub) MarkEventOutboxDelivered(id int, deliveredAt time.T
 	return nil
 }
 func (s *teamRepositoryStub) MarkEventOutboxFailed(id int, availableAt time.Time, cause string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for idx := range s.outboxRows {
 		if s.outboxRows[idx].ID == id {
 			s.outboxRows[idx].Status = "pending"

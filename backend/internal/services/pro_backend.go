@@ -17,6 +17,14 @@ type proBackend struct {
 	service *instanceService
 }
 
+type instanceResourceCleaner interface {
+	DeleteAllInstanceResources(ctx context.Context, userID, instanceID int) error
+}
+
+var newInstanceResourceCleaner = func() instanceResourceCleaner {
+	return k8s.NewCleanupService()
+}
+
 func newProBackend(s *instanceService) *proBackend {
 	return &proBackend{service: s}
 }
@@ -542,19 +550,25 @@ func (b *proBackend) Delete(ctx context.Context, instance *models.Instance) erro
 		GetHub().BroadcastInstanceStatus(instance.UserID, instance)
 	}
 
-	go b.completeDeletion(instance.UserID, instance.ID)
+	auditInstance := *instance
+	go b.completeDeletion(&auditInstance)
 
 	return nil
 }
 
-func (b *proBackend) completeDeletion(userID, instanceID int) {
+func (b *proBackend) completeDeletion(instance *models.Instance) {
 	s := b.service
+	if s == nil || instance == nil {
+		return
+	}
 	ctx := context.Background()
+	userID := instance.UserID
+	instanceID := instance.ID
 
 	fmt.Printf("Starting background deletion of instance %d (user %d)\n", instanceID, userID)
 
 	// Use CleanupService to delete ALL resources for this instance (including duplicates)
-	cleanupService := k8s.NewCleanupService()
+	cleanupService := newInstanceResourceCleaner()
 	if err := cleanupService.DeleteAllInstanceResources(ctx, userID, instanceID); err != nil {
 		fmt.Printf("Warning: error during resource cleanup for instance %d: %v\n", instanceID, err)
 	}
@@ -563,10 +577,12 @@ func (b *proBackend) completeDeletion(userID, instanceID int) {
 	fmt.Printf("Deleting instance %d from database...\n", instanceID)
 	if err := s.instanceRepo.Delete(instanceID); err != nil {
 		fmt.Printf("Error: failed to delete instance %d record: %v\n", instanceID, err)
+		s.emitInstanceLifecycleFailure(AuditEventInstanceDelete, instance, err)
 		return
 	}
 
 	fmt.Printf("Instance %d deleted successfully\n", instanceID)
+	s.emitInstanceLifecycle(AuditEventInstanceDelete, instance, AuditOutcomeSuccess, "")
 }
 
 func (b *proBackend) cleanupOrphanedResourcesByUser(ctx context.Context, userID int) {
