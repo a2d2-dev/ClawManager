@@ -74,13 +74,16 @@ func (s *instanceService) runtimeBackendForMode(mode string) (RuntimeBackend, bo
 	}
 }
 
+// runtimeBackendForInstance dispatches to the lite backend when
+// v2RuntimeTypeForInstance matches the pre-migration lite/V2 predicate:
+// gateway runtime_type OR persisted lite mode. Mode-keyed dispatch across
+// multiple backends will be introduced later with issues #6/#7.
 func (s *instanceService) runtimeBackendForInstance(instance *models.Instance) (RuntimeBackend, string, bool) {
 	runtimeType, ok := v2RuntimeTypeForInstance(instance)
 	if !ok {
 		return nil, "", false
 	}
-	// Dispatch derives mode from runtime_type to preserve pre-refactor behavior; mode authority work is tracked in issue #7.
-	backend, ok := s.runtimeBackendForMode(InstanceModeForRuntimeType(normalizeInstanceRuntimeType(instance.RuntimeType)))
+	backend, ok := s.runtimeBackendForMode(InstanceModeLite)
 	if !ok {
 		return nil, "", false
 	}
