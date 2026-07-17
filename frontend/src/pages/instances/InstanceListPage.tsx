@@ -135,17 +135,17 @@ function typeLabel(type: string) {
 }
 
 function modeLabel(mode: Instance["instance_mode"]) {
+  if (mode === "isolated") return "Isolated Gateway";
   return mode === "pro" ? "Pro" : "Lite";
 }
 
 function modeClass(mode: Instance["instance_mode"]) {
-  return mode === "pro"
-    ? "border-indigo-200 bg-indigo-50 text-indigo-700"
-    : "border-sky-200 bg-sky-50 text-sky-700";
+  if (mode === "isolated") return "border-amber-200 bg-amber-50 text-amber-700";
+  return mode === "pro" ? "border-indigo-200 bg-indigo-50 text-indigo-700" : "border-sky-200 bg-sky-50 text-sky-700";
 }
 
 function isLiteInstance(instance: Instance) {
-  return instance.instance_mode === "lite" || instance.runtime_type === "gateway";
+  return instance.instance_mode === "lite" || (!instance.instance_mode && instance.runtime_type === "gateway");
 }
 
 function formatBytes(value?: number) {

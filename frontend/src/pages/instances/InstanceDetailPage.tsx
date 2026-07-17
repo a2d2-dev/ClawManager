@@ -891,7 +891,7 @@ const InstanceDetailPage: React.FC = () => {
         </div>
         <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-500">
           <span>{typeLabel(instance.type)}</span>
-          <span>Mode {instance.instance_mode === "pro" ? "Pro" : "Lite"}</span>
+          <span>Mode {instance.instance_mode === "isolated" ? "Isolated Gateway" : instance.instance_mode === "pro" ? "Pro" : "Lite"}</span>
           <span>Runtime {instance.runtime_type}</span>
           <span>{formatBytes(status?.workspace_usage_bytes ?? instance.workspace_usage_bytes)}</span>
           <span>{formatDateTime(instance.updated_at, locale)}</span>

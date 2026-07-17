@@ -108,7 +108,7 @@ const InstanceManagementPage: React.FC = () => {
   const modeStats = useMemo(() => {
     return instances.reduce(
       (stats, instance) => {
-        const mode = instance.instance_mode === 'pro' ? 'pro' : 'lite';
+        const mode = instance.instance_mode === 'isolated' ? 'isolated' : instance.instance_mode === 'pro' ? 'pro' : 'lite';
         stats[mode].total += 1;
         if (instance.status === 'running') {
           stats[mode].running += 1;
@@ -120,6 +120,7 @@ const InstanceManagementPage: React.FC = () => {
       },
       {
         lite: { total: 0, running: 0, creating: 0 },
+        isolated: { total: 0, running: 0, creating: 0 },
         pro: { total: 0, running: 0, creating: 0 },
       },
     );
@@ -175,12 +176,12 @@ const InstanceManagementPage: React.FC = () => {
   };
 
   const getModeBadge = (mode: Instance['instance_mode']) => {
-    return mode === 'pro'
-      ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
-      : 'border-sky-200 bg-sky-50 text-sky-700';
+    if (mode === 'isolated') return 'border-amber-200 bg-amber-50 text-amber-700';
+    return mode === 'pro' ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-sky-200 bg-sky-50 text-sky-700';
   };
 
   const formatMode = (mode: Instance['instance_mode']) => {
+    if (mode === 'isolated') return 'Isolated Gateway';
     return mode === 'pro' ? 'Pro' : 'Lite';
   };
 
@@ -270,6 +271,7 @@ const InstanceManagementPage: React.FC = () => {
             >
               <option value="all">All modes</option>
               <option value="lite">Lite</option>
+              <option value="isolated">Isolated Gateway</option>
               <option value="pro">Pro</option>
             </select>
             <select
@@ -291,8 +293,8 @@ const InstanceManagementPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-2">
-          {(['lite', 'pro'] as const).map((mode) => {
+        <div className="grid gap-3 md:grid-cols-3">
+          {(['lite', 'isolated', 'pro'] as const).map((mode) => {
             const stats = modeStats[mode];
             return (
               <section key={mode} className="app-panel p-4">
@@ -300,7 +302,7 @@ const InstanceManagementPage: React.FC = () => {
                   <div>
                     <div className="text-sm font-semibold text-[#171212]">{formatMode(mode)}</div>
                     <div className="mt-1 text-xs text-[#8f8681]">
-                      {mode === 'lite' ? 'Gateway runtime' : 'Desktop deployment'}
+                      {mode === 'pro' ? 'Desktop deployment' : mode === 'isolated' ? 'Gateway isolation' : 'Gateway runtime'}
                     </div>
                   </div>
                   <span className={`inline-flex rounded-md border px-2 py-1 text-xs font-medium ${getModeBadge(mode)}`}>
@@ -388,7 +390,7 @@ const InstanceManagementPage: React.FC = () => {
                       </td>
                       <td className="px-5 py-4 align-top">
                         <div className="text-sm text-[#171212]">
-                          {instance.instance_mode === 'lite' ? 'Gateway binding' : 'Deployment'}
+                          {instance.instance_mode === 'pro' ? 'Deployment' : 'Gateway binding'}
                         </div>
                         <div className="mt-1 text-xs text-[#8f8681]">{instance.pod_name || '-'}</div>
                         <div className="mt-1 text-xs text-[#8f8681]">{instance.pod_namespace || '-'}</div>
@@ -465,6 +467,4 @@ function getAdminErrorMessage(err: unknown, fallback: string) {
 }
 
 export default InstanceManagementPage;
-
-
 
