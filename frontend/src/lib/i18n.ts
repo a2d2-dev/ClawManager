@@ -1738,6 +1738,10 @@ export const translations: Record<Locale, TranslationTree> = {
       descriptionOptional: "Description (optional)",
       descriptionPlaceholder: "Brief description of this instance...",
       instanceMode: "Instance Mode",
+      instanceModeLite: "Lite",
+      instanceModeIsolated: "Isolated Gateway",
+      instanceModePro: "Pro",
+      instanceModePrefix: "Mode {mode}",
       instanceModeLiteDescription:
         "Shared gateway runtime with fast startup and lower resource use.",
       instanceModeIsolatedDescription:
@@ -1749,6 +1753,14 @@ export const translations: Record<Locale, TranslationTree> = {
         "Failed to load cluster capability status.",
       instanceModeProDescription:
         "Dedicated desktop runtime with stronger isolation and full desktop resources.",
+      modeSummaryLite: "Gateway runtime",
+      modeSummaryIsolated: "Gateway isolation",
+      modeSummaryPro: "Desktop deployment",
+      runningCount: "{count} running",
+      allModes: "All modes",
+      allBackends: "All backends",
+      gatewayBinding: "Gateway binding",
+      deploymentBackend: "Deployment",
       selectInstanceType: "Select Instance Type",
       quickConfiguration: "Quick Configuration",
       customConfiguration: "Custom Configuration",
@@ -3071,6 +3083,10 @@ export const translations: Record<Locale, TranslationTree> = {
       descriptionOptional: "描述（可选）",
       descriptionPlaceholder: "简要描述这个实例...",
       instanceMode: "实例模式",
+      instanceModeLite: "Lite",
+      instanceModeIsolated: "独立网关",
+      instanceModePro: "Pro",
+      instanceModePrefix: "模式 {mode}",
       instanceModeLiteDescription:
         "共享 Gateway 运行时，启动更快、资源占用更低。",
       instanceModeIsolatedDescription:
@@ -3082,6 +3098,14 @@ export const translations: Record<Locale, TranslationTree> = {
         "加载集群能力状态失败。",
       instanceModeProDescription:
         "独享 Desktop 运行时，隔离性更强，使用完整桌面资源。",
+      modeSummaryLite: "Gateway 运行时",
+      modeSummaryIsolated: "Gateway 隔离",
+      modeSummaryPro: "桌面部署",
+      runningCount: "{count} 个运行中",
+      allModes: "全部模式",
+      allBackends: "全部后端",
+      gatewayBinding: "Gateway 绑定",
+      deploymentBackend: "Deployment",
       selectInstanceType: "选择实例类型",
       quickConfiguration: "快速配置",
       customConfiguration: "自定义配置",

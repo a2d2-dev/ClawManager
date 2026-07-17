@@ -168,9 +168,13 @@ func TestMigration038AllowsIsolatedInstanceMode(t *testing.T) {
 	}
 	sql := string(raw)
 	for _, required := range []string{
+		"information_schema.COLUMNS",
+		"COLUMN_NAME = 'instance_mode'",
+		"COLUMN_TYPE = 'enum(''lite'',''isolated'',''pro'')'",
 		"MODIFY COLUMN instance_mode",
-		"ENUM('lite', 'isolated', 'pro')",
-		"NOT NULL DEFAULT 'lite'",
+		"ENUM(''lite'', ''isolated'', ''pro'')",
+		"NOT NULL DEFAULT ''lite''",
+		"'SELECT 1'",
 	} {
 		if !strings.Contains(sql, required) {
 			t.Fatalf("migration 038 must contain %s", required)

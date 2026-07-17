@@ -83,7 +83,11 @@ func (s *instanceService) ValidateCreateRequests(userID int, requests []CreateIn
 	currentGPU := 0
 	existingNames := map[string]struct{}{}
 	for _, existing := range existingInstances {
-		if instanceModeUsesDedicatedResources(modeForExistingInstance(&existing)) {
+		existingMode, err := modeForExistingInstance(&existing)
+		if err != nil {
+			return err
+		}
+		if instanceModeUsesDedicatedResources(existingMode) {
 			currentCPU += existing.CPUCores
 			currentMemory += existing.MemoryGB
 			currentStorage += existing.DiskGB
@@ -110,6 +114,9 @@ func (s *instanceService) ValidateCreateRequests(userID int, requests []CreateIn
 		requestNames[normalizedName] = struct{}{}
 		instanceMode, err := resolveCreateInstanceMode(req)
 		if err != nil {
+			return err
+		}
+		if _, err := resolveCreateRuntimeType(req, instanceMode); err != nil {
 			return err
 		}
 		if instanceModeUsesDedicatedResources(instanceMode) {
@@ -336,7 +343,11 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	currentStorage := 0
 	currentGPU := 0
 	for _, existing := range existingInstances {
-		if instanceModeUsesDedicatedResources(modeForExistingInstance(&existing)) {
+		existingMode, err := modeForExistingInstance(&existing)
+		if err != nil {
+			return nil, err
+		}
+		if instanceModeUsesDedicatedResources(existingMode) {
 			currentCPU += existing.CPUCores
 			currentMemory += existing.MemoryGB
 			currentStorage += existing.DiskGB
@@ -463,15 +474,21 @@ func (s *instanceService) Start(instanceID int) error {
 	if instance.Status == "running" {
 		return fmt.Errorf("instance is already running")
 	}
-	if err := s.enforceInstanceModeLimits(ctx, modeForExistingInstance(instance), instance.CPUCores, instance.MemoryGB, instance.DiskGB, instance.GPUCount); err != nil {
+	instanceMode, err := modeForExistingInstance(instance)
+	if err != nil {
+		return err
+	}
+	if err := s.enforceInstanceModeLimits(ctx, instanceMode, instance.CPUCores, instance.MemoryGB, instance.DiskGB, instance.GPUCount); err != nil {
 		return err
 	}
 
-	if backend, runtimeType, ok := s.runtimeBackendForInstance(instance); ok {
+	if backend, runtimeType, ok, err := s.runtimeBackendForInstance(instance); err != nil {
+		return err
+	} else if ok {
 		return backend.Start(ctx, instance, runtimeType)
 	}
 
-	return fmt.Errorf("runtime backend %q is not configured for instance", modeForExistingInstance(instance))
+	return fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 }
 
 func (s *instanceService) securityModeForInstance(instanceType string) k8s.PodSecurityMode {
@@ -790,11 +807,17 @@ func (s *instanceService) Stop(instanceID int) error {
 		return fmt.Errorf("instance not found")
 	}
 
-	if backend, _, ok := s.runtimeBackendForInstance(instance); ok {
+	if backend, _, ok, err := s.runtimeBackendForInstance(instance); err != nil {
+		return err
+	} else if ok {
 		return backend.Stop(ctx, instance)
 	}
 
-	return fmt.Errorf("runtime backend %q is not configured for instance", modeForExistingInstance(instance))
+	instanceMode, err := modeForExistingInstance(instance)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 }
 
 // Restart restarts an instance
@@ -842,11 +865,17 @@ func (s *instanceService) Delete(instanceID int) error {
 		return fmt.Errorf("instance not found")
 	}
 
-	if backend, _, ok := s.runtimeBackendForInstance(instance); ok {
+	if backend, _, ok, err := s.runtimeBackendForInstance(instance); err != nil {
+		return err
+	} else if ok {
 		return backend.Delete(context.Background(), instance)
 	}
 
-	return fmt.Errorf("runtime backend %q is not configured for instance", modeForExistingInstance(instance))
+	instanceMode, err := modeForExistingInstance(instance)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 }
 
 // cleanupOrphanedResources cleans up any orphaned K8s resources for an instance
@@ -976,11 +1005,17 @@ func (s *instanceService) GetInstanceStatus(instanceID int) (*InstanceStatus, er
 		return nil, fmt.Errorf("instance not found")
 	}
 
-	if backend, _, ok := s.runtimeBackendForInstance(instance); ok {
+	if backend, _, ok, err := s.runtimeBackendForInstance(instance); err != nil {
+		return nil, err
+	} else if ok {
 		return backend.Status(ctx, instance)
 	}
 
-	return nil, fmt.Errorf("runtime backend %q is not configured for instance", modeForExistingInstance(instance))
+	instanceMode, err := modeForExistingInstance(instance)
+	if err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 }
 
 // ForceSyncInstance forces a status sync for a single instance
@@ -1202,10 +1237,21 @@ func instanceUsesDesktopRuntime(instance *models.Instance) bool {
 }
 
 func resolveCreateInstanceMode(req CreateInstanceRequest) (string, error) {
-	if mode, ok := NormalizeInstanceMode(req.Mode); ok {
+	modeRaw := strings.TrimSpace(req.Mode)
+	instanceModeRaw := strings.TrimSpace(req.InstanceMode)
+	if mode, ok := NormalizeInstanceMode(modeRaw); ok {
+		if instanceModeRaw != "" {
+			instanceMode, ok := NormalizeInstanceMode(instanceModeRaw)
+			if !ok {
+				return "", fmt.Errorf("unsupported instance mode %q", req.InstanceMode)
+			}
+			if instanceMode != mode {
+				return "", fmt.Errorf("invalid instance mode/runtime_type combination: mode=%s conflicts with instance_mode=%s", mode, instanceMode)
+			}
+		}
 		return mode, nil
 	}
-	if strings.TrimSpace(req.Mode) != "" {
+	if modeRaw != "" {
 		return "", fmt.Errorf("unsupported instance mode %q", req.Mode)
 	}
 	if mode, ok := NormalizeInstanceMode(req.InstanceMode); ok {
@@ -1230,8 +1276,8 @@ func resolveCreateRuntimeType(req CreateInstanceRequest, instanceMode string) (s
 		return "", err
 	}
 	if runtimeType != "" {
-		if instanceMode == InstanceModeIsolated && runtimeType != RuntimeBackendGateway {
-			return "", fmt.Errorf("isolated instance mode requires runtime_type=gateway")
+		if err := validateCreateModeRuntimeCombination(instanceMode, runtimeType); err != nil {
+			return "", err
 		}
 		return runtimeType, nil
 	}
@@ -1243,6 +1289,26 @@ func resolveCreateRuntimeType(req CreateInstanceRequest, instanceMode string) (s
 	default:
 		return "", fmt.Errorf("unsupported instance mode %q", instanceMode)
 	}
+}
+
+func validateCreateModeRuntimeCombination(instanceMode, runtimeType string) error {
+	switch instanceMode {
+	case InstanceModeLite:
+		if runtimeType == RuntimeBackendGateway {
+			return nil
+		}
+	case InstanceModePro:
+		if runtimeType == RuntimeBackendDesktop || runtimeType == RuntimeBackendShell {
+			return nil
+		}
+	case InstanceModeIsolated:
+		if runtimeType == RuntimeBackendGateway {
+			return nil
+		}
+	default:
+		return fmt.Errorf("unsupported instance mode %q", instanceMode)
+	}
+	return fmt.Errorf("invalid instance mode/runtime_type combination: mode=%s runtime_type=%s", instanceMode, runtimeType)
 }
 
 func resolveRequestedRuntimeType(runtimeType string) (string, error) {
@@ -1262,17 +1328,14 @@ func resolveRequestedRuntimeType(runtimeType string) (string, error) {
 	}
 }
 
-func modeForExistingInstance(instance *models.Instance) string {
+func modeForExistingInstance(instance *models.Instance) (string, error) {
 	if instance == nil {
-		return InstanceModeLite
+		return "", fmt.Errorf("invalid instance mode for instance_id=0: instance is nil; repair instance data before dispatch")
 	}
 	if mode, ok := NormalizeInstanceMode(instance.InstanceMode); ok {
-		return mode
+		return mode, nil
 	}
-	if strings.TrimSpace(instance.InstanceMode) == "" {
-		return InstanceModeLite
-	}
-	return strings.TrimSpace(instance.InstanceMode)
+	return "", fmt.Errorf("invalid instance mode for instance_id=%d: instance_mode=%q; repair instance data before dispatch", instance.ID, instance.InstanceMode)
 }
 
 func instanceModeUsesDedicatedResources(mode string) bool {

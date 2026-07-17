@@ -78,16 +78,19 @@ func (s *instanceService) runtimeBackendForMode(mode string) (RuntimeBackend, bo
 	}
 }
 
-func (s *instanceService) runtimeBackendForInstance(instance *models.Instance) (RuntimeBackend, string, bool) {
+func (s *instanceService) runtimeBackendForInstance(instance *models.Instance) (RuntimeBackend, string, bool, error) {
 	if instance == nil {
-		return nil, "", false
+		return nil, "", false, fmt.Errorf("invalid instance mode for instance_id=0: instance is nil; repair instance data before dispatch")
 	}
-	mode := modeForExistingInstance(instance)
+	mode, err := modeForExistingInstance(instance)
+	if err != nil {
+		return nil, "", false, err
+	}
 	backend, ok := s.runtimeBackendForMode(mode)
 	if !ok {
-		return nil, "", false
+		return nil, "", false, nil
 	}
-	return backend, normalizeInstanceRuntimeType(instance.RuntimeType), true
+	return backend, normalizeInstanceRuntimeType(instance.RuntimeType), true, nil
 }
 
 func (b *liteBackend) Create(ctx context.Context, userID int, req CreateInstanceRequest, instanceMode string, runtimeType string, environmentOverridesJSON *string) (*models.Instance, error) {

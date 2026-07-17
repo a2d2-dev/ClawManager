@@ -134,9 +134,9 @@ function typeLabel(type: string) {
   return type === "hermes" ? "Hermes" : type === "openclaw" ? "OpenClaw" : type;
 }
 
-function modeLabel(mode: Instance["instance_mode"]) {
-  if (mode === "isolated") return "Isolated Gateway";
-  return mode === "pro" ? "Pro" : "Lite";
+function modeLabel(mode: Instance["instance_mode"], t: (key: string) => string) {
+  if (mode === "isolated") return t("instances.instanceModeIsolated");
+  return mode === "pro" ? t("instances.instanceModePro") : t("instances.instanceModeLite");
 }
 
 function modeClass(mode: Instance["instance_mode"]) {
@@ -275,7 +275,7 @@ const InstanceListPage: React.FC = () => {
         instance.name.toLowerCase().includes(query) ||
         typeLabel(instance.type).toLowerCase().includes(query) ||
         instance.instance_mode.toLowerCase().includes(query) ||
-        modeLabel(instance.instance_mode).toLowerCase().includes(query) ||
+        modeLabel(instance.instance_mode, t).toLowerCase().includes(query) ||
         (teamMemberships.get(instance.id) || []).some(({ team, member }) =>
           [
             team.name,
@@ -783,7 +783,7 @@ const InstanceListPage: React.FC = () => {
                             instance.instance_mode,
                           )}`}
                         >
-                          {modeLabel(instance.instance_mode)}
+                          {modeLabel(instance.instance_mode, t)}
                         </span>
                       </div>
                     </td>

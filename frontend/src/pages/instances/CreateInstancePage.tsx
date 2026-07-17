@@ -119,22 +119,22 @@ const CREATE_INSTANCE_TYPES = INSTANCE_TYPES.filter((type) =>
 
 const INSTANCE_MODE_OPTIONS: {
   id: InstanceMode;
-  label: string;
+  labelKey: string;
   descriptionKey: string;
 }[] = [
   {
     id: "lite",
-    label: "Lite",
+    labelKey: "instances.instanceModeLite",
     descriptionKey: "instances.instanceModeLiteDescription",
   },
   {
     id: "isolated",
-    label: "Isolated Gateway",
+    labelKey: "instances.instanceModeIsolated",
     descriptionKey: "instances.instanceModeIsolatedDescription",
   },
   {
     id: "pro",
-    label: "Pro",
+    labelKey: "instances.instanceModePro",
     descriptionKey: "instances.instanceModeProDescription",
   },
 ];
@@ -571,7 +571,7 @@ const CreateInstancePage: React.FC = () => {
               }`}
             >
               <span className="text-sm font-semibold text-gray-950">
-                {mode.label}
+                {t(mode.labelKey)}
               </span>
               <span className="mt-1 block text-sm text-gray-500">
                 {t(mode.descriptionKey)}
@@ -596,8 +596,8 @@ const CreateInstancePage: React.FC = () => {
   };
 
   const instanceModeLabel = (mode: InstanceMode) => {
-    if (mode === "isolated") return "Isolated Gateway";
-    return mode === "pro" ? "Pro" : "Lite";
+    if (mode === "isolated") return t("instances.instanceModeIsolated");
+    return mode === "pro" ? t("instances.instanceModePro") : t("instances.instanceModeLite");
   };
 
   useEffect(() => {

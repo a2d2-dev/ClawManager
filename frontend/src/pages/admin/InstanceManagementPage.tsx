@@ -181,18 +181,18 @@ const InstanceManagementPage: React.FC = () => {
   };
 
   const formatMode = (mode: Instance['instance_mode']) => {
-    if (mode === 'isolated') return 'Isolated Gateway';
-    return mode === 'pro' ? 'Pro' : 'Lite';
+    if (mode === 'isolated') return t('instances.instanceModeIsolated');
+    return mode === 'pro' ? t('instances.instanceModePro') : t('instances.instanceModeLite');
   };
 
   const formatRuntime = (runtimeType: Instance['runtime_type']) => {
     if (runtimeType === 'gateway') {
-      return 'Gateway';
+      return t('instances.runtimeTypeGateway');
     }
     if (runtimeType === 'shell') {
-      return 'Shell';
+      return t('instances.runtimeTypeShell');
     }
-    return 'Desktop';
+    return t('instances.runtimeTypeDesktop');
   };
 
   const formatResources = (instance: Instance) => {
@@ -269,20 +269,20 @@ const InstanceManagementPage: React.FC = () => {
               onChange={(e) => setModeFilter(e.target.value as 'all' | Instance['instance_mode'])}
               className="app-input"
             >
-              <option value="all">All modes</option>
-              <option value="lite">Lite</option>
-              <option value="isolated">Isolated Gateway</option>
-              <option value="pro">Pro</option>
+              <option value="all">{t('instances.allModes')}</option>
+              <option value="lite">{t('instances.instanceModeLite')}</option>
+              <option value="isolated">{t('instances.instanceModeIsolated')}</option>
+              <option value="pro">{t('instances.instanceModePro')}</option>
             </select>
             <select
               value={runtimeFilter}
               onChange={(e) => setRuntimeFilter(e.target.value as 'all' | Instance['runtime_type'])}
               className="app-input"
             >
-              <option value="all">All backends</option>
-              <option value="gateway">Gateway</option>
-              <option value="desktop">Desktop</option>
-              <option value="shell">Shell</option>
+              <option value="all">{t('instances.allBackends')}</option>
+              <option value="gateway">{t('instances.runtimeTypeGateway')}</option>
+              <option value="desktop">{t('instances.runtimeTypeDesktop')}</option>
+              <option value="shell">{t('instances.runtimeTypeShell')}</option>
             </select>
             <button
               onClick={() => void loadData()}
@@ -302,11 +302,15 @@ const InstanceManagementPage: React.FC = () => {
                   <div>
                     <div className="text-sm font-semibold text-[#171212]">{formatMode(mode)}</div>
                     <div className="mt-1 text-xs text-[#8f8681]">
-                      {mode === 'pro' ? 'Desktop deployment' : mode === 'isolated' ? 'Gateway isolation' : 'Gateway runtime'}
+                      {mode === 'pro'
+                        ? t('instances.modeSummaryPro')
+                        : mode === 'isolated'
+                          ? t('instances.modeSummaryIsolated')
+                          : t('instances.modeSummaryLite')}
                     </div>
                   </div>
                   <span className={`inline-flex rounded-md border px-2 py-1 text-xs font-medium ${getModeBadge(mode)}`}>
-                    {stats.running} running
+                    {t('instances.runningCount', { count: stats.running })}
                   </span>
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
@@ -390,7 +394,9 @@ const InstanceManagementPage: React.FC = () => {
                       </td>
                       <td className="px-5 py-4 align-top">
                         <div className="text-sm text-[#171212]">
-                          {instance.instance_mode === 'pro' ? 'Deployment' : 'Gateway binding'}
+                          {instance.instance_mode === 'pro'
+                            ? t('instances.deploymentBackend')
+                            : t('instances.gatewayBinding')}
                         </div>
                         <div className="mt-1 text-xs text-[#8f8681]">{instance.pod_name || '-'}</div>
                         <div className="mt-1 text-xs text-[#8f8681]">{instance.pod_namespace || '-'}</div>
@@ -467,4 +473,3 @@ function getAdminErrorMessage(err: unknown, fallback: string) {
 }
 
 export default InstanceManagementPage;
-

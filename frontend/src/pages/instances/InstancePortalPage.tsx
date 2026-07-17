@@ -48,9 +48,9 @@ function typeLabel(type: Instance["type"]) {
   return type === "hermes" ? "Hermes" : type === "openclaw" ? "OpenClaw" : type;
 }
 
-function modeLabel(mode: Instance["instance_mode"]) {
-  if (mode === "isolated") return "Isolated Gateway";
-  return mode === "pro" ? "Pro" : "Lite";
+function modeLabel(mode: Instance["instance_mode"], t: (key: string) => string) {
+  if (mode === "isolated") return t("instances.instanceModeIsolated");
+  return mode === "pro" ? t("instances.instanceModePro") : t("instances.instanceModeLite");
 }
 
 function modeClass(mode: Instance["instance_mode"]) {
@@ -444,7 +444,7 @@ const InstancePortalPage: React.FC = () => {
                                     instance.instance_mode,
                                   )}`}
                                 >
-                                  {modeLabel(instance.instance_mode)}
+                                  {modeLabel(instance.instance_mode, t)}
                                 </span>
                               </div>
                               <span
