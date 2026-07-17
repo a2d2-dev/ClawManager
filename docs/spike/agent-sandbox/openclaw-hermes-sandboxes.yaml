@@ -1,0 +1,152 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clawmanager-sandbox-spike
+---
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: openclaw-gateway
+  namespace: clawmanager-sandbox-spike
+  labels:
+    app.kubernetes.io/name: openclaw-gateway
+    app.kubernetes.io/part-of: clawmanager-agent-sandbox-spike
+spec:
+  service: true
+  podTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: openclaw-gateway
+        app.kubernetes.io/part-of: clawmanager-agent-sandbox-spike
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: ecs-liufeng-001
+      containers:
+        - name: openclaw
+          image: swr.cn-east-3.myhuaweicloud.com/risecloud/clawmanager-openclaw-lite:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -lc
+            - |
+              mkdir -p /workspaces /config/.openclaw
+              exec /usr/local/bin/openclaw gateway run \
+                --allow-unconfigured \
+                --auth token \
+                --token spike-token \
+                --bind lan \
+                --port 19090 \
+                --force \
+                --dev \
+                --verbose
+          env:
+            - name: HOME
+              value: /config
+            - name: RUNTIME_WORKSPACE_ROOT
+              value: /workspaces
+            - name: OPENCLAW_GATEWAY_TOKEN
+              value: spike-token
+          ports:
+            - name: gateway
+              containerPort: 19090
+              protocol: TCP
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspaces
+            - name: config
+              mountPath: /config
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local
+        resources:
+          requests:
+            storage: 2Gi
+        volumeMode: Filesystem
+    - metadata:
+        name: config
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local
+        resources:
+          requests:
+            storage: 1Gi
+        volumeMode: Filesystem
+---
+apiVersion: agents.x-k8s.io/v1beta1
+kind: Sandbox
+metadata:
+  name: hermes-gateway
+  namespace: clawmanager-sandbox-spike
+  labels:
+    app.kubernetes.io/name: hermes-gateway
+    app.kubernetes.io/part-of: clawmanager-agent-sandbox-spike
+spec:
+  service: true
+  podTemplate:
+    metadata:
+      labels:
+        app.kubernetes.io/name: hermes-gateway
+        app.kubernetes.io/part-of: clawmanager-agent-sandbox-spike
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: ecs-liufeng-001
+      containers:
+        - name: hermes
+          image: swr.cn-east-3.myhuaweicloud.com/risecloud/clawmanager-hermes-lite:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -lc
+            - |
+              mkdir -p /workspaces /config/.hermes
+              exec /usr/local/bin/start-hermes-dashboard-gateway
+          env:
+            - name: HOME
+              value: /config
+            - name: HERMES_HOME
+              value: /config/.hermes
+            - name: RUNTIME_WORKSPACE_ROOT
+              value: /workspaces
+            - name: CLAWMANAGER_GATEWAY_PORT
+              value: "19090"
+            - name: HOST
+              value: 0.0.0.0
+            - name: HERMES_ACCEPT_HOOKS
+              value: "1"
+          ports:
+            - name: gateway
+              containerPort: 19090
+              protocol: TCP
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspaces
+            - name: config
+              mountPath: /config
+  volumeClaimTemplates:
+    - metadata:
+        name: workspace
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local
+        resources:
+          requests:
+            storage: 2Gi
+        volumeMode: Filesystem
+    - metadata:
+        name: config
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: local
+        resources:
+          requests:
+            storage: 1Gi
+        volumeMode: Filesystem
