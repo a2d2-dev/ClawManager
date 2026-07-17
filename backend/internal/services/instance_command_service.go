@@ -88,9 +88,18 @@ type instanceCommandService struct {
 	runtimeRepo      repository.InstanceRuntimeStatusRepository
 	desiredStateRepo repository.InstanceDesiredStateRepository
 	skillRepo        repository.SkillRepository
+	auditLogger      AuditLogger
 }
 
 func NewInstanceCommandService(commandRepo repository.InstanceCommandRepository, runtimeRepo repository.InstanceRuntimeStatusRepository, desiredStateRepo repository.InstanceDesiredStateRepository, skillRepos ...repository.SkillRepository) InstanceCommandService {
+	return newInstanceCommandService(commandRepo, runtimeRepo, desiredStateRepo, NewAuditLoggerFromEnv(), skillRepos...)
+}
+
+func NewInstanceCommandServiceWithAuditLogger(commandRepo repository.InstanceCommandRepository, runtimeRepo repository.InstanceRuntimeStatusRepository, desiredStateRepo repository.InstanceDesiredStateRepository, auditLogger AuditLogger, skillRepos ...repository.SkillRepository) InstanceCommandService {
+	return newInstanceCommandService(commandRepo, runtimeRepo, desiredStateRepo, auditLogger, skillRepos...)
+}
+
+func newInstanceCommandService(commandRepo repository.InstanceCommandRepository, runtimeRepo repository.InstanceRuntimeStatusRepository, desiredStateRepo repository.InstanceDesiredStateRepository, auditLogger AuditLogger, skillRepos ...repository.SkillRepository) InstanceCommandService {
 	var skillRepo repository.SkillRepository
 	if len(skillRepos) > 0 {
 		skillRepo = skillRepos[0]
@@ -100,6 +109,7 @@ func NewInstanceCommandService(commandRepo repository.InstanceCommandRepository,
 		runtimeRepo:      runtimeRepo,
 		desiredStateRepo: desiredStateRepo,
 		skillRepo:        skillRepo,
+		auditLogger:      auditLogger,
 	}
 }
 
@@ -206,7 +216,11 @@ func (s *instanceCommandService) MarkStarted(session *AgentSession, commandID in
 	command.Status = instanceCommandStatusRunning
 	command.AgentID = &session.Agent.AgentID
 	command.StartedAt = startedAt
-	return s.commandRepo.Update(command)
+	if err := s.commandRepo.Update(command); err != nil {
+		return err
+	}
+	s.emitAgentCommandEvent(AuditEventAgentCommandStarted, session, command)
+	return nil
 }
 
 func (s *instanceCommandService) MarkFinished(session *AgentSession, commandID int, req AgentCommandFinishRequest) error {
@@ -251,7 +265,30 @@ func (s *instanceCommandService) MarkFinished(session *AgentSession, commandID i
 			return err
 		}
 	}
-	return s.commandRepo.Update(command)
+	if err := s.commandRepo.Update(command); err != nil {
+		return err
+	}
+	s.emitAgentCommandEvent(AuditEventAgentCommandCompleted, session, command)
+	return nil
+}
+
+func (s *instanceCommandService) emitAgentCommandEvent(event string, session *AgentSession, command *models.InstanceCommand) {
+	if s == nil || session == nil || session.Instance == nil || session.Agent == nil || command == nil {
+		return
+	}
+	emitAudit(s.auditLogger, AuditLogEvent{
+		Event:        event,
+		InstanceMode: auditModeForExistingInstance(session.Instance),
+		InstanceID:   auditIntPtr(session.Instance.ID),
+		UserID:       auditIntPtr(session.Instance.UserID),
+		Context: map[string]interface{}{
+			"command_id":      command.ID,
+			"command_type":    strings.TrimSpace(command.CommandType),
+			"command_status":  strings.TrimSpace(command.Status),
+			"idempotency_key": strings.TrimSpace(command.IdempotencyKey),
+			"agent_id":        strings.TrimSpace(session.Agent.AgentID),
+		},
+	})
 }
 
 func (s *instanceCommandService) markUninstalledSkillRemoved(command *models.InstanceCommand, observedAt time.Time) error {

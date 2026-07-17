@@ -41,6 +41,7 @@ type liteBackend struct {
 	agentClient           RuntimeAgentClient
 	openClawConfigService OpenClawConfigService
 	workspaceRoot         string
+	auditLogger           AuditLogger
 }
 
 func newLiteBackend(s *instanceService) *liteBackend {
@@ -58,6 +59,7 @@ func newLiteBackend(s *instanceService) *liteBackend {
 		agentClient:           s.agentClient,
 		openClawConfigService: s.openClawConfigService,
 		workspaceRoot:         workspaceRoot,
+		auditLogger:           s.auditLogger,
 	}
 }
 
@@ -406,9 +408,19 @@ func (b *liteBackend) runtimeWorkspaceRoot() string {
 }
 
 func (b *liteBackend) ensureGatewayToken(instance *models.Instance) (string, error) {
-	return ensureGatewayTokenWithRepo(b.instanceRepo, instance)
+	hadToken := instance != nil && instance.AccessToken != nil && strings.TrimSpace(*instance.AccessToken) != ""
+	token, err := ensureGatewayTokenWithRepo(b.instanceRepo, instance)
+	if err == nil && !hadToken {
+		emitCredentialMinted(b.auditLogger, instance, "instance_gateway_token")
+	}
+	return token, err
 }
 
 func (b *liteBackend) ensureAgentBootstrapToken(instance *models.Instance) (string, error) {
-	return ensureAgentBootstrapTokenWithRepo(b.instanceRepo, instance)
+	hadToken := instance != nil && instance.AgentBootstrapToken != nil && strings.TrimSpace(*instance.AgentBootstrapToken) != ""
+	token, err := ensureAgentBootstrapTokenWithRepo(b.instanceRepo, instance)
+	if err == nil && !hadToken {
+		emitCredentialMinted(b.auditLogger, instance, "agent_bootstrap_token")
+	}
+	return token, err
 }

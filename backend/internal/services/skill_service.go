@@ -186,10 +186,15 @@ type skillService struct {
 	commandService InstanceCommandService
 	storage        ObjectStorageService
 	scanner        SkillScannerClient
+	auditLogger    AuditLogger
 }
 
-func NewSkillService(repo repository.SkillRepository, instanceRepo repository.InstanceRepository, commandService InstanceCommandService, storage ObjectStorageService, scanner SkillScannerClient) SkillService {
-	return &skillService{repo: repo, instanceRepo: instanceRepo, commandService: commandService, storage: storage, scanner: scanner}
+func NewSkillService(repo repository.SkillRepository, instanceRepo repository.InstanceRepository, commandService InstanceCommandService, storage ObjectStorageService, scanner SkillScannerClient, auditLoggers ...AuditLogger) SkillService {
+	auditLogger := NewAuditLoggerFromEnv()
+	if len(auditLoggers) > 0 {
+		auditLogger = auditLoggers[0]
+	}
+	return &skillService{repo: repo, instanceRepo: instanceRepo, commandService: commandService, storage: storage, scanner: scanner, auditLogger: auditLogger}
 }
 
 func (s *skillService) ImportArchive(ctx context.Context, userID int, fileHeader *multipart.FileHeader) ([]SkillPayload, error) {
@@ -548,7 +553,7 @@ func (s *skillService) attachSkillModelToInstance(instanceID int, skill *models.
 		return nil, err
 	}
 	if versionID != nil && blob != nil {
-		if _, err := s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
+		command, err := s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
 			CommandType: InstanceCommandTypeInstallSkill,
 			Payload: map[string]interface{}{
 				"skill_id":      formatExternalSkillID(skillID),
@@ -558,9 +563,11 @@ func (s *skillService) attachSkillModelToInstance(instanceID int, skill *models.
 			},
 			IdempotencyKey: fmt.Sprintf("install-skill-%d-%d-%d", instanceID, skillID, now.UnixNano()),
 			TimeoutSeconds: 300,
-		}); err != nil {
+		})
+		if err != nil {
 			return nil, fmt.Errorf("failed to queue install skill command: %w", err)
 		}
+		s.emitSkillRequested(AuditEventSkillInstallRequested, instanceID, skill, versionID, command)
 	}
 	items, err := s.ListInstanceSkills(instanceID)
 	if err != nil {
@@ -807,15 +814,55 @@ func (s *skillService) RemoveSkillFromInstance(instanceID int, skillID int) erro
 	if err := s.repo.UpsertInstanceSkill(item); err != nil {
 		return err
 	}
-	if _, err := s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
+	command, err := s.commandService.Create(instanceID, nil, CreateInstanceCommandRequest{
 		CommandType:    InstanceCommandTypeUninstallSkill,
 		Payload:        map[string]interface{}{"skill_id": skillID, "target_name": skillKeyForRemoval(item)},
 		IdempotencyKey: fmt.Sprintf("remove-skill-%d-%d-%d", instanceID, skillID, now.UnixNano()),
 		TimeoutSeconds: 300,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("failed to queue uninstall skill command: %w", err)
 	}
+	s.emitSkillRequested(AuditEventSkillUninstallRequested, instanceID, &models.Skill{
+		ID:       skillID,
+		SkillKey: skillKeyForRemoval(item),
+	}, item.SkillVersionID, command)
 	return nil
+}
+
+func (s *skillService) emitSkillRequested(event string, instanceID int, skill *models.Skill, versionID *int, command *InstanceCommandPayload) {
+	if s == nil || s.instanceRepo == nil || skill == nil {
+		return
+	}
+	instance, err := s.instanceRepo.GetByID(instanceID)
+	if err != nil || instance == nil {
+		return
+	}
+	context := map[string]interface{}{
+		"skill_id":   skill.ID,
+		"skill_key":  strings.TrimSpace(skill.SkillKey),
+		"command_id": commandIDForAudit(command),
+	}
+	if versionID != nil {
+		context["skill_version_id"] = *versionID
+	}
+	if command != nil {
+		context["command_type"] = strings.TrimSpace(command.CommandType)
+	}
+	emitAudit(s.auditLogger, AuditLogEvent{
+		Event:        event,
+		InstanceMode: auditModeForExistingInstance(instance),
+		InstanceID:   auditIntPtr(instance.ID),
+		UserID:       auditIntPtr(instance.UserID),
+		Context:      context,
+	})
+}
+
+func commandIDForAudit(command *InstanceCommandPayload) interface{} {
+	if command == nil {
+		return nil
+	}
+	return command.ID
 }
 
 func (s *skillService) removeLiteInstanceSkillDirectory(instanceID int, item *models.InstanceSkill) error {

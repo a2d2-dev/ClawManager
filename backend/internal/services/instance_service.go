@@ -229,6 +229,7 @@ type instanceService struct {
 	pvcService            *k8s.PVCService
 	serviceService        *k8s.ServiceService
 	networkPolicyService  *k8s.NetworkPolicyService
+	auditLogger           AuditLogger
 }
 
 type gatewayModelInjection struct {
@@ -261,6 +262,12 @@ func WithRuntimeCapabilities(capabilities RuntimeCapabilities) InstanceServiceOp
 	}
 }
 
+func WithInstanceAuditLogger(logger AuditLogger) InstanceServiceOption {
+	return func(s *instanceService) {
+		s.auditLogger = logger
+	}
+}
+
 // NewInstanceService creates a new instance service
 func NewInstanceService(instanceRepo repository.InstanceRepository, quotaRepo repository.QuotaRepository, llmModelRepo repository.LLMModelRepository, openClawConfigService OpenClawConfigService, options ...InstanceServiceOption) InstanceService {
 	service := &instanceService{
@@ -274,6 +281,7 @@ func NewInstanceService(instanceRepo repository.InstanceRepository, quotaRepo re
 		pvcService:            k8s.NewPVCService(),
 		serviceService:        k8s.NewServiceService(),
 		networkPolicyService:  k8s.NewNetworkPolicyService(),
+		auditLogger:           NewAuditLoggerFromEnv(),
 	}
 	for _, option := range options {
 		if option != nil {
@@ -286,55 +294,67 @@ func NewInstanceService(instanceRepo repository.InstanceRepository, quotaRepo re
 // Create creates a new instance
 func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models.Instance, error) {
 	ctx := context.Background()
+	requestedMode := auditCreateInstanceMode(req)
 	req.Name = strings.TrimSpace(req.Name)
 	req.Type = strings.ToLower(strings.TrimSpace(req.Type))
 	environmentOverrides, err := normalizeEnvironmentOverrides(req.EnvironmentOverrides)
 	if err != nil {
+		s.emitCreateRefused(userID, requestedMode, req, "validation_failed")
 		return nil, err
 	}
 	if profile, ok := normalizeDesktopStreamProfile(req.DesktopStreamProfile); !ok {
+		s.emitCreateRefused(userID, requestedMode, req, "validation_failed")
 		return nil, fmt.Errorf("invalid desktop stream profile")
 	} else if profile != "" {
 		environmentOverrides = applyDesktopStreamProfileEnv(environmentOverrides, profile)
 	}
 	environmentOverridesJSON, err := marshalEnvironmentOverrides(environmentOverrides)
 	if err != nil {
+		s.emitCreateRefused(userID, requestedMode, req, "validation_failed")
 		return nil, err
 	}
 
 	// Check user quota
 	quota, err := s.quotaRepo.GetByUserID(userID)
 	if err != nil {
+		s.emitCreateRefused(userID, requestedMode, req, "quota_lookup_failed")
 		return nil, fmt.Errorf("failed to get user quota: %w", err)
 	}
 
 	if quota == nil {
+		s.emitCreateRefused(userID, requestedMode, req, "quota_missing")
 		return nil, fmt.Errorf("user quota not found")
 	}
 	instanceMode, err := resolveCreateInstanceMode(req)
 	if err != nil {
+		s.emitCreateRefused(userID, requestedMode, req, refusalCodeForError(err))
 		return nil, err
 	}
 	modeRuntimeType, err := resolveCreateRuntimeType(req, instanceMode)
 	if err != nil {
+		s.emitCreateRefused(userID, instanceMode, req, refusalCodeForError(err))
 		return nil, err
 	}
 	if err := s.ensureInstanceModeAvailable(instanceMode); err != nil {
+		s.emitCreateRefused(userID, instanceMode, req, refusalCodeForError(err))
 		return nil, err
 	}
 
 	// Check instance count limit
 	currentCount, err := s.instanceRepo.CountByUserID(userID)
 	if err != nil {
+		s.emitCreateRefused(userID, instanceMode, req, "quota_lookup_failed")
 		return nil, fmt.Errorf("failed to count instances: %w", err)
 	}
 
 	if currentCount >= quota.MaxInstances {
+		s.emitCreateRefused(userID, instanceMode, req, "quota_instance_limit")
 		return nil, fmt.Errorf("instance limit reached: %d/%d", currentCount, quota.MaxInstances)
 	}
 
 	existingInstances, err := s.instanceRepo.GetByUserID(userID, 0, 1000)
 	if err != nil {
+		s.emitCreateRefused(userID, instanceMode, req, "quota_lookup_failed")
 		return nil, fmt.Errorf("failed to list user instances for quota validation: %w", err)
 	}
 
@@ -345,6 +365,7 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	for _, existing := range existingInstances {
 		existingMode, err := modeForExistingInstance(&existing)
 		if err != nil {
+			s.emitCreateRefused(userID, instanceMode, req, refusalCodeForError(err))
 			return nil, err
 		}
 		if instanceModeUsesDedicatedResources(existingMode) {
@@ -359,9 +380,11 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 
 	nameExists, err := s.instanceRepo.ExistsByUserIDAndName(userID, req.Name)
 	if err != nil {
+		s.emitCreateRefused(userID, instanceMode, req, "validation_failed")
 		return nil, fmt.Errorf("failed to validate instance name: %w", err)
 	}
 	if nameExists {
+		s.emitCreateRefused(userID, instanceMode, req, "duplicate_name")
 		return nil, fmt.Errorf("instance name already exists")
 	}
 
@@ -372,32 +395,44 @@ func (s *instanceService) Create(userID int, req CreateInstanceRequest) (*models
 	if instanceModeUsesDedicatedResources(instanceMode) {
 		// Check CPU limit
 		if currentCPU+req.CPUCores > quota.MaxCPUCores {
+			s.emitCreateRefused(userID, instanceMode, req, "quota_cpu_exceeded")
 			return nil, fmt.Errorf("CPU cores exceed quota: current %v, requested %v, max %v", currentCPU, req.CPUCores, quota.MaxCPUCores)
 		}
 
 		// Check memory limit
 		if currentMemory+req.MemoryGB > quota.MaxMemoryGB {
+			s.emitCreateRefused(userID, instanceMode, req, "quota_memory_exceeded")
 			return nil, fmt.Errorf("memory exceed quota: current %dGB, requested %dGB, max %dGB", currentMemory, req.MemoryGB, quota.MaxMemoryGB)
 		}
 
 		// Check storage limit
 		if currentStorage+req.DiskGB > quota.MaxStorageGB {
+			s.emitCreateRefused(userID, instanceMode, req, "quota_storage_exceeded")
 			return nil, fmt.Errorf("storage exceed quota: current %dGB, requested %dGB, max %dGB", currentStorage, req.DiskGB, quota.MaxStorageGB)
 		}
 
 		// Check GPU limit
 		if currentGPU+requestedGPU > quota.MaxGPUCount {
+			s.emitCreateRefused(userID, instanceMode, req, "quota_gpu_exceeded")
 			return nil, fmt.Errorf("GPU count exceed quota: current %d, requested %d, max %d", currentGPU, requestedGPU, quota.MaxGPUCount)
 		}
 	}
 	if err := s.enforceInstanceModeLimits(ctx, instanceMode, req.CPUCores, req.MemoryGB, req.DiskGB, requestedGPU); err != nil {
+		s.emitCreateRefused(userID, instanceMode, req, refusalCodeForError(err))
 		return nil, err
 	}
 	backend, ok := s.runtimeBackendForMode(instanceMode)
 	if !ok {
+		s.emitCreateRefused(userID, instanceMode, req, "backend_unconfigured")
 		return nil, fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 	}
-	return backend.Create(ctx, userID, req, instanceMode, modeRuntimeType, environmentOverridesJSON)
+	instance, err := backend.Create(ctx, userID, req, instanceMode, modeRuntimeType, environmentOverridesJSON)
+	if err != nil {
+		s.emitCreateRefused(userID, instanceMode, req, refusalCodeForError(err))
+		return nil, err
+	}
+	s.emitInstanceLifecycle(AuditEventInstanceCreate, instance, AuditOutcomeSuccess, "")
+	return instance, nil
 }
 
 // GetByID gets an instance by ID
@@ -468,26 +503,37 @@ func (s *instanceService) Start(instanceID int) error {
 	}
 
 	if instance == nil {
+		s.emitInstanceRefused(AuditEventInstanceStartRefused, nil, "not_found", map[string]interface{}{"requested_instance_id": instanceID})
 		return fmt.Errorf("instance not found")
 	}
 
 	if instance.Status == "running" {
+		s.emitInstanceRefused(AuditEventInstanceStartRefused, instance, "already_running", nil)
 		return fmt.Errorf("instance is already running")
 	}
 	instanceMode, err := modeForExistingInstance(instance)
 	if err != nil {
+		s.emitInstanceRefused(AuditEventInstanceStartRefused, instance, refusalCodeForError(err), nil)
 		return err
 	}
 	if err := s.enforceInstanceModeLimits(ctx, instanceMode, instance.CPUCores, instance.MemoryGB, instance.DiskGB, instance.GPUCount); err != nil {
+		s.emitInstanceRefused(AuditEventInstanceStartRefused, instance, refusalCodeForError(err), nil)
 		return err
 	}
 
 	if backend, runtimeType, ok, err := s.runtimeBackendForInstance(instance); err != nil {
+		s.emitInstanceRefused(AuditEventInstanceStartRefused, instance, refusalCodeForError(err), nil)
 		return err
 	} else if ok {
-		return backend.Start(ctx, instance, runtimeType)
+		if err := backend.Start(ctx, instance, runtimeType); err != nil {
+			s.emitInstanceRefused(AuditEventInstanceStartRefused, instance, refusalCodeForError(err), nil)
+			return err
+		}
+		s.emitInstanceLifecycle(AuditEventInstanceStart, instance, AuditOutcomeSuccess, "")
+		return nil
 	}
 
+	s.emitInstanceRefused(AuditEventInstanceStartRefused, instance, "backend_unconfigured", nil)
 	return fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 }
 
@@ -502,7 +548,12 @@ func (s *instanceService) securityModeForInstance(instanceType string) k8s.PodSe
 }
 
 func (s *instanceService) ensureGatewayToken(instance *models.Instance) (string, error) {
-	return ensureGatewayTokenWithRepo(s.instanceRepo, instance)
+	hadToken := instance != nil && instance.AccessToken != nil && strings.TrimSpace(*instance.AccessToken) != ""
+	token, err := ensureGatewayTokenWithRepo(s.instanceRepo, instance)
+	if err == nil && !hadToken {
+		emitCredentialMinted(s.auditLogger, instance, "instance_gateway_token")
+	}
+	return token, err
 }
 
 func ensureGatewayTokenWithRepo(instanceRepo repository.InstanceRepository, instance *models.Instance) (string, error) {
@@ -613,7 +664,12 @@ func (s *instanceService) runtimeBootstrapEnv(instance *models.Instance) (map[st
 	return provider.RuntimeEnvForSnapshot(instance.UserID, instance.Type, *instance.OpenClawConfigSnapshotID)
 }
 func (s *instanceService) ensureAgentBootstrapToken(instance *models.Instance) (string, error) {
-	return ensureAgentBootstrapTokenWithRepo(s.instanceRepo, instance)
+	hadToken := instance != nil && instance.AgentBootstrapToken != nil && strings.TrimSpace(*instance.AgentBootstrapToken) != ""
+	token, err := ensureAgentBootstrapTokenWithRepo(s.instanceRepo, instance)
+	if err == nil && !hadToken {
+		emitCredentialMinted(s.auditLogger, instance, "agent_bootstrap_token")
+	}
+	return token, err
 }
 
 func ensureAgentBootstrapTokenWithRepo(instanceRepo repository.InstanceRepository, instance *models.Instance) (string, error) {
@@ -804,19 +860,28 @@ func (s *instanceService) Stop(instanceID int) error {
 	}
 
 	if instance == nil {
+		s.emitInstanceRefused(AuditEventInstanceStopRefused, nil, "not_found", map[string]interface{}{"requested_instance_id": instanceID})
 		return fmt.Errorf("instance not found")
 	}
 
 	if backend, _, ok, err := s.runtimeBackendForInstance(instance); err != nil {
+		s.emitInstanceRefused(AuditEventInstanceStopRefused, instance, refusalCodeForError(err), nil)
 		return err
 	} else if ok {
-		return backend.Stop(ctx, instance)
+		if err := backend.Stop(ctx, instance); err != nil {
+			s.emitInstanceRefused(AuditEventInstanceStopRefused, instance, refusalCodeForError(err), nil)
+			return err
+		}
+		s.emitInstanceLifecycle(AuditEventInstanceStop, instance, AuditOutcomeSuccess, "")
+		return nil
 	}
 
 	instanceMode, err := modeForExistingInstance(instance)
 	if err != nil {
+		s.emitInstanceRefused(AuditEventInstanceStopRefused, instance, refusalCodeForError(err), nil)
 		return err
 	}
+	s.emitInstanceRefused(AuditEventInstanceStopRefused, instance, "backend_unconfigured", nil)
 	return fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 }
 
@@ -862,19 +927,28 @@ func (s *instanceService) Delete(instanceID int) error {
 	}
 
 	if instance == nil {
+		s.emitInstanceRefused(AuditEventInstanceDeleteRefused, nil, "not_found", map[string]interface{}{"requested_instance_id": instanceID})
 		return fmt.Errorf("instance not found")
 	}
 
 	if backend, _, ok, err := s.runtimeBackendForInstance(instance); err != nil {
+		s.emitInstanceRefused(AuditEventInstanceDeleteRefused, instance, refusalCodeForError(err), nil)
 		return err
 	} else if ok {
-		return backend.Delete(context.Background(), instance)
+		if err := backend.Delete(context.Background(), instance); err != nil {
+			s.emitInstanceRefused(AuditEventInstanceDeleteRefused, instance, refusalCodeForError(err), nil)
+			return err
+		}
+		s.emitInstanceLifecycle(AuditEventInstanceDelete, instance, AuditOutcomeSuccess, "")
+		return nil
 	}
 
 	instanceMode, err := modeForExistingInstance(instance)
 	if err != nil {
+		s.emitInstanceRefused(AuditEventInstanceDeleteRefused, instance, refusalCodeForError(err), nil)
 		return err
 	}
+	s.emitInstanceRefused(AuditEventInstanceDeleteRefused, instance, "backend_unconfigured", nil)
 	return fmt.Errorf("runtime backend %q is not configured for instance", instanceMode)
 }
 
