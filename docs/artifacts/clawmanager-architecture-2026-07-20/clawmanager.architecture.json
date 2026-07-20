@@ -2,305 +2,388 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "ClawManager Architecture",
-    "subtitle": "Kubernetes-native control plane for AI agent instances, governed AI access, runtime orchestration, and reusable resources",
+    "title": "ClawManager Runtime Architecture",
+    "subtitle": "Issue #1 target: ClawManager product control plane + Runtime Adapter Interface + Lite / Isolated Gateway / Pro runtime backends",
     "output": "clawmanager-architecture.html",
-    "viewBox": [1420, 820]
+    "viewBox": [1540, 900]
   },
   "components": [
     {
       "id": "users",
       "type": "external",
       "label": "Admins / Users",
-      "sublabel": "Browser access",
-      "pos": [40, 320],
+      "sublabel": "portal, desktop, API",
+      "pos": [40, 390],
       "size": [132, 62]
     },
     {
-      "id": "frontend",
+      "id": "console",
       "type": "frontend",
-      "label": "Frontend Console",
-      "sublabel": "React 19 + Vite",
-      "pos": [232, 320],
-      "size": [154, 62]
+      "label": "Console UI",
+      "sublabel": "instances, modes, policy",
+      "pos": [225, 390],
+      "size": [150, 62]
     },
     {
-      "id": "backend_api",
+      "id": "api",
       "type": "backend",
-      "label": "Go API Server",
-      "sublabel": "Gin /api/v1",
-      "pos": [452, 320],
-      "size": [154, 62],
+      "label": "ClawManager API",
+      "sublabel": "Go / Gin /api/v1",
+      "pos": [435, 390],
+      "size": [170, 62],
       "tag": ":9001"
     },
     {
-      "id": "auth",
+      "id": "policy",
       "type": "security",
-      "label": "Auth + RBAC",
-      "sublabel": "JWT middleware",
-      "pos": [452, 170],
-      "size": [154, 62]
+      "label": "Policy Model",
+      "sublabel": "tenant, nodegroup, egress",
+      "pos": [435, 190],
+      "size": [170, 62]
     },
     {
-      "id": "instance_services",
-      "type": "backend",
-      "label": "Instance Services",
-      "sublabel": "instances, teams, quotas",
-      "pos": [672, 190],
-      "size": [164, 62]
+      "id": "state",
+      "type": "database",
+      "label": "State + Audit",
+      "sublabel": "MySQL, MinIO, Redis",
+      "pos": [435, 630],
+      "size": [170, 62]
     },
     {
-      "id": "agent_control",
-      "type": "backend",
-      "label": "Agent Control Plane",
-      "sublabel": "state, commands, heartbeats",
-      "pos": [672, 320],
-      "size": [164, 62]
+      "id": "access_gateway",
+      "type": "security",
+      "label": "Access Gateway",
+      "sublabel": "private entry, share link",
+      "pos": [670, 240],
+      "size": [176, 62]
     },
     {
-      "id": "resource_mgmt",
+      "id": "runtime_adapter",
       "type": "backend",
-      "label": "Resource Management",
-      "sublabel": "channels, skills, bundles",
-      "pos": [672, 450],
-      "size": [164, 62]
+      "label": "Runtime Adapter Interface",
+      "sublabel": "Create, Start, Stop, Status",
+      "pos": [670, 390],
+      "size": [176, 62],
+      "tag": "mode dispatch"
     },
     {
       "id": "ai_gateway",
       "type": "security",
       "label": "AI Gateway",
-      "sublabel": "routing, risk, audit",
-      "pos": [902, 320],
+      "sublabel": "model route, risk, trace",
+      "pos": [670, 540],
+      "size": [176, 62]
+    },
+    {
+      "id": "lite_backend",
+      "type": "backend",
+      "label": "Lite Backend",
+      "sublabel": "shared runtime pool",
+      "pos": [910, 175],
       "size": [164, 62]
     },
     {
-      "id": "state_store",
-      "type": "database",
-      "label": "State Stores",
-      "sublabel": "MySQL, MinIO, Redis",
-      "pos": [672, 610],
-      "size": [164, 62]
+      "id": "isolated_backend",
+      "type": "backend",
+      "label": "Isolated Gateway Backend",
+      "sublabel": "no desktop, strong egress",
+      "pos": [910, 370],
+      "size": [180, 62]
     },
     {
-      "id": "kubernetes",
-      "type": "cloud",
-      "label": "Kubernetes API",
-      "sublabel": "Deployment, Service, PVC",
-      "pos": [902, 500],
+      "id": "pro_backend",
+      "type": "backend",
+      "label": "Pro Backend",
+      "sublabel": "desktop runtime",
+      "pos": [910, 565],
       "size": [164, 62]
     },
     {
       "id": "lite_runtime",
       "type": "cloud",
       "label": "Lite Runtime Pool",
-      "sublabel": "shared runtime Pods",
-      "pos": [1120, 210],
-      "size": [174, 64]
+      "sublabel": "many gateways per Pod",
+      "pos": [1165, 150],
+      "size": [190, 62]
     },
     {
-      "id": "dedicated_runtime",
+      "id": "sandbox_runtime",
       "type": "cloud",
-      "label": "Pro / Isolated Runtime",
-      "sublabel": "dedicated Pods + workspace",
-      "pos": [1120, 430],
-      "size": [174, 64]
+      "label": "agent-sandbox Runtime",
+      "sublabel": "Sandbox CRD / warm pool",
+      "pos": [1165, 310],
+      "size": [190, 62]
     },
     {
-      "id": "model_providers",
+      "id": "native_runtime",
+      "type": "cloud",
+      "label": "Native Pod Fallback",
+      "sublabel": "Pod, Service, NetworkPolicy",
+      "pos": [1165, 435],
+      "size": [190, 62],
+      "tag": "dev fallback"
+    },
+    {
+      "id": "pro_runtime",
+      "type": "cloud",
+      "label": "Pro Desktop Runtime",
+      "sublabel": "Pod, PVC, web desktop",
+      "pos": [1165, 595],
+      "size": [190, 62]
+    },
+    {
+      "id": "egress",
+      "type": "security",
+      "label": "Egress Enforcement",
+      "sublabel": "proxy, CNI, NetworkPolicy",
+      "pos": [1370, 410],
+      "size": [136, 72]
+    },
+    {
+      "id": "models",
       "type": "external",
       "label": "Model Providers",
-      "sublabel": "external or secure models",
-      "pos": [1120, 640],
-      "size": [174, 64]
+      "sublabel": "regular or secure models",
+      "pos": [1370, 595],
+      "size": [136, 72]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
       "label": "Access Surface",
-      "wraps": ["users", "frontend"],
+      "wraps": ["users", "console"],
       "pad": 30
     },
     {
       "kind": "security-group",
-      "label": "ClawManager Control Plane",
-      "wraps": [
-        "backend_api",
-        "auth",
-        "instance_services",
-        "agent_control",
-        "resource_mgmt",
-        "ai_gateway",
-        "state_store"
-      ],
-      "pad": 36
+      "label": "ClawManager Product Control Plane",
+      "wraps": ["api", "policy", "state", "access_gateway", "runtime_adapter", "ai_gateway"],
+      "pad": 38
+    },
+    {
+      "kind": "region",
+      "label": "Runtime Adapter Layer",
+      "wraps": ["lite_backend", "isolated_backend", "pro_backend"],
+      "pad": 30
     },
     {
       "kind": "region",
       "label": "Kubernetes Runtime Plane",
-      "wraps": ["kubernetes", "lite_runtime", "dedicated_runtime"],
-      "pad": 34
+      "wraps": ["lite_runtime", "sandbox_runtime", "native_runtime", "pro_runtime", "egress"],
+      "pad": 32
     }
   ],
   "connections": [
     {
       "from": "users",
-      "to": "frontend",
+      "to": "console",
       "label": "Browser",
       "variant": "emphasis"
     },
     {
-      "from": "frontend",
-      "to": "backend_api",
+      "from": "console",
+      "to": "api",
       "label": "REST + WS",
       "variant": "emphasis"
     },
     {
-      "from": "backend_api",
-      "to": "auth",
-      "label": "JWT/RBAC",
+      "from": "api",
+      "to": "policy",
+      "label": "effective policy",
       "variant": "security",
       "fromSide": "top",
       "toSide": "bottom",
       "route": "orthogonal-v",
-      "labelDy": -8
+      "labelAt": [520, 312]
     },
     {
-      "from": "backend_api",
-      "to": "instance_services",
-      "label": "operate",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "from": "backend_api",
-      "to": "agent_control",
-      "label": "desired state",
-      "variant": "emphasis",
-      "labelAt": [639, 396]
-    },
-    {
-      "from": "backend_api",
-      "to": "resource_mgmt",
-      "label": "resources",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "from": "backend_api",
-      "to": "ai_gateway",
-      "label": "gateway admin",
-      "variant": "security",
-      "fromSide": "top",
-      "toSide": "top",
-      "via": [[529, 112], [984, 112]],
-      "labelAt": [750, 112]
-    },
-    {
-      "from": "instance_services",
-      "to": "state_store",
+      "from": "api",
+      "to": "state",
       "label": "metadata",
       "fromSide": "bottom",
       "toSide": "top",
       "route": "orthogonal-v",
-      "labelDx": -70
+      "labelAt": [520, 548]
     },
     {
-      "from": "resource_mgmt",
-      "to": "state_store",
-      "label": "objects + scans",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "route": "orthogonal-v",
-      "labelDx": 74
-    },
-    {
-      "from": "ai_gateway",
-      "to": "state_store",
-      "label": "trace / cost / risk",
+      "from": "api",
+      "to": "access_gateway",
+      "label": "access",
       "variant": "security",
-      "fromSide": "bottom",
-      "toSide": "right",
-      "via": [[984, 430], [850, 430], [850, 641]],
-      "labelAt": [924, 430]
-    },
-    {
-      "from": "agent_control",
-      "to": "kubernetes",
-      "label": "deploy / scale",
-      "variant": "emphasis"
-    },
-    {
-      "from": "kubernetes",
-      "to": "lite_runtime",
-      "label": "shared Pods",
-      "fromSide": "right",
-      "toSide": "bottom",
-      "via": [[1088, 531], [1088, 300], [1207, 300]],
-      "labelAt": [1088, 396]
-    },
-    {
-      "from": "kubernetes",
-      "to": "dedicated_runtime",
-      "label": "dedicated Pods",
       "fromSide": "right",
       "toSide": "left",
-      "labelAt": [1093, 576]
+      "labelAt": [640, 332]
     },
     {
-      "from": "lite_runtime",
-      "to": "ai_gateway",
-      "label": "OpenAI API",
-      "variant": "security",
-      "fromSide": "left",
-      "toSide": "right",
-      "route": "orthogonal-h",
-      "labelAt": [1093, 304]
-    },
-    {
-      "from": "dedicated_runtime",
-      "to": "ai_gateway",
-      "label": "OpenAI API",
-      "variant": "security",
-      "fromSide": "left",
-      "toSide": "right",
-      "route": "orthogonal-h",
-      "labelAt": [1093, 405]
-    },
-    {
-      "from": "ai_gateway",
-      "to": "model_providers",
-      "label": "route model",
+      "from": "api",
+      "to": "runtime_adapter",
+      "label": "mode dispatch",
       "variant": "emphasis",
-      "fromSide": "bottom",
+      "labelAt": [638, 466]
+    },
+    {
+      "from": "api",
+      "to": "ai_gateway",
+      "label": "model governance",
+      "variant": "security",
+      "fromSide": "right",
       "toSide": "left",
-      "via": [[1088, 351], [1088, 672]],
-      "labelAt": [1088, 575]
+      "labelAt": [640, 522]
+    },
+    {
+      "from": "runtime_adapter",
+      "to": "lite_backend",
+      "label": "lite",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[875, 421], [875, 206]],
+      "labelAt": [875, 284]
+    },
+    {
+      "from": "runtime_adapter",
+      "to": "isolated_backend",
+      "label": "isolated",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "runtime_adapter",
+      "to": "pro_backend",
+      "label": "pro",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[875, 421], [875, 596]],
+      "labelAt": [875, 522]
+    },
+    {
+      "from": "lite_backend",
+      "to": "lite_runtime",
+      "label": "gateway process",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "isolated_backend",
+      "to": "sandbox_runtime",
+      "label": "Sandbox CRD",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [1128, 348]
+    },
+    {
+      "from": "isolated_backend",
+      "to": "native_runtime",
+      "label": "fallback",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [1128, 472]
+    },
+    {
+      "from": "pro_backend",
+      "to": "pro_runtime",
+      "label": "desktop Pod",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "access_gateway",
+      "to": "lite_runtime",
+      "label": "private route",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1125, 271], [1125, 181]],
+      "labelAt": [1035, 271]
+    },
+    {
+      "from": "access_gateway",
+      "to": "sandbox_runtime",
+      "label": "private route",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1125, 271], [1125, 341]],
+      "labelAt": [1035, 300]
+    },
+    {
+      "from": "access_gateway",
+      "to": "pro_runtime",
+      "label": "desktop route",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1110, 271], [1110, 626]],
+      "labelAt": [1028, 688]
+    },
+    {
+      "from": "sandbox_runtime",
+      "to": "egress",
+      "label": "egress policy",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [1338, 392]
+    },
+    {
+      "from": "native_runtime",
+      "to": "egress",
+      "label": "network policy",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [1338, 511]
+    },
+    {
+      "from": "ai_gateway",
+      "to": "models",
+      "label": "OpenAI-compatible route",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[1025, 571], [1025, 700], [1360, 700], [1360, 631]],
+      "labelAt": [1186, 700]
+    },
+    {
+      "from": "ai_gateway",
+      "to": "state",
+      "label": "trace, risk, cost",
+      "variant": "security",
+      "fromSide": "left",
+      "toSide": "right",
+      "route": "orthogonal-h",
+      "labelAt": [640, 628]
     }
   ],
   "cards": [
     {
-      "dot": "cyan",
-      "title": "Product surface",
-      "items": [
-        "React console calls the Go /api/v1 backend over REST and WebSocket.",
-        "User-facing domains include instances, Team workspaces, runtime pools, AI Gateway, skills, and resource bundles."
-      ]
-    },
-    {
       "dot": "emerald",
-      "title": "Runtime control",
+      "title": "Runtime split",
       "items": [
-        "Agent Control Plane tracks registration, heartbeat, desired state, command history, and runtime skill inventory.",
-        "Kubernetes services create Deployments, Services, PVCs, runtime pools, and dedicated runtime Pods."
+        "Lite stays a high-density shared runtime pool for trusted low-risk work.",
+        "Isolated Gateway is a no-desktop agent runtime with stronger per-agent egress control.",
+        "Pro remains the dedicated desktop runtime for GUI and browser workloads."
       ]
     },
     {
       "dot": "rose",
-      "title": "Governance path",
+      "title": "Issue #1 architecture change",
       "items": [
-        "AI Gateway is the in-cluster model governance layer: model routing, risk rules, audit traces, and cost records.",
-        "Resource Management compiles channels, skills, bundles, injection snapshots, and security scan results into runtime configuration."
+        "ClawManager owns product policy, lifecycle, gateway access, and audit.",
+        "Runtime Adapter Interface hides the backend choice behind Create / Start / Stop / Status.",
+        "Isolated Gateway prefers agent-sandbox Sandbox CRDs; native Pod fallback is kept for development or migration."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Governed execution path",
+      "items": [
+        "Access Gateway keeps instances private and routes console access to the selected runtime.",
+        "AI Gateway provides model routing, risk decisions, trace records, and cost accounting.",
+        "Egress enforcement combines proxy, CNI, and NetworkPolicy capabilities according to runtime mode."
       ]
     }
   ]

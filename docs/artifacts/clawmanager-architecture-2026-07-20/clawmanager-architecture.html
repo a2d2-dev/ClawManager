@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.11.0">
-  <title>ClawManager Architecture Diagram</title>
+  <title>ClawManager Runtime Architecture Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -525,14 +525,14 @@
     <div class="header">
       <div class="header-row">
         <div class="pulse-dot"></div>
-        <h1>ClawManager Architecture</h1>
+        <h1>ClawManager Runtime Architecture</h1>
       </div>
-      <p class="subtitle">Kubernetes-native control plane for AI agent instances, governed AI access, runtime orchestration, and reusable resources</p>
+      <p class="subtitle">Issue #1 target: ClawManager product control plane + Runtime Adapter Interface + Lite / Isolated Gateway / Pro runtime backends</p>
     </div>
 
     <!-- Main Diagram -->
     <div class="diagram-container">
-      <svg viewBox="0 0 1420 820" role="img" aria-label="ClawManager Architecture — Kubernetes-native control plane for AI agent instances, governed AI access, runtime orchestration, and reusable resources (architecture diagram)">
+      <svg viewBox="0 0 1540 900" role="img" aria-label="ClawManager Runtime Architecture — Issue #1 target: ClawManager product control plane + Runtime Adapter Interface + Lite / Isolated Gateway / Pro runtime backends (architecture diagram)">
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -556,148 +556,188 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect x="10" y="290" width="406" height="112" rx="12" class="c-region" stroke-width="1"/>
-        <text x="18" y="308" class="t-cloud" font-size="9" font-weight="600">Access Surface</text>
+        <rect x="10" y="360" width="395" height="112" rx="12" class="c-region" stroke-width="1"/>
+        <text x="18" y="378" class="t-cloud" font-size="9" font-weight="600">Access Surface</text>
 
-        <rect x="416" y="134" width="686" height="558" rx="8" class="c-security-group" stroke-width="1"/>
-        <text x="424" y="152" class="t-security" font-size="9" font-weight="600">ClawManager Control Plane</text>
+        <rect x="397" y="152" width="487" height="560" rx="8" class="c-security-group" stroke-width="1"/>
+        <text x="405" y="170" class="t-security" font-size="9" font-weight="600">ClawManager Product Control Plane</text>
 
-        <rect x="868" y="176" width="460" height="406" rx="12" class="c-region" stroke-width="1"/>
-        <text x="876" y="194" class="t-cloud" font-size="9" font-weight="600">Kubernetes Runtime Plane</text>
+        <rect x="880" y="145" width="240" height="502" rx="12" class="c-region" stroke-width="1"/>
+        <text x="888" y="163" class="t-cloud" font-size="9" font-weight="600">Runtime Adapter Layer</text>
+
+        <rect x="1133" y="118" width="405" height="559" rx="12" class="c-region" stroke-width="1"/>
+        <text x="1141" y="136" class="t-cloud" font-size="9" font-weight="600">Kubernetes Runtime Plane</text>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path d="M 172 351 L 232 351" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 386 351 L 452 351" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 529 320 L 529 276 L 529 276 L 529 232" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 606 351 L 631 351 Q 639 351 639 343 L 639 229 Q 639 221 647 221 L 672 221" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path d="M 606 351 L 672 351" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 606 351 L 631 351 Q 639 351 639 359 L 639 473 Q 639 481 647 481 L 672 481" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path d="M 529 320 L 529 120 Q 529 112 537 112 L 976 112 Q 984 112 984 120 L 984 320" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 754 252 L 754 431 L 754 431 L 754 610" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path d="M 754 512 L 754 561 L 754 561 L 754 610" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path d="M 984 382 L 984 422 Q 984 430 976 430 L 858 430 Q 850 430 850 438 L 850 634 Q 850 641 843 641 L 836 641" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 836 351 L 861 351 Q 869 351 869 359 L 869 523 Q 869 531 877 531 L 902 531" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path d="M 1066 531 L 1080 531 Q 1088 531 1088 523 L 1088 308 Q 1088 300 1096 300 L 1199 300 Q 1207 300 1207 292 L 1207 274" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path d="M 1066 531 L 1085 531 Q 1093 531 1093 523 L 1093 470 Q 1093 462 1101 462 L 1120 462" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path d="M 1120 242 L 1101 242 Q 1093 242 1093 250 L 1093 343 Q 1093 351 1085 351 L 1066 351" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 1120 462 L 1101 462 Q 1093 462 1093 454 L 1093 359 Q 1093 351 1085 351 L 1066 351" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path d="M 984 382 L 1080.333343793424 353.2852532923447 Q 1088 351 1088 359 L 1088 664 Q 1088 672 1096 672 L 1120 672" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 172 421 L 225 421" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 375 421 L 435 421" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 520 390 L 520 321 L 520 321 L 520 252" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 520 452 L 520 541 L 520 541 L 520 630" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 605 421 L 629.5 421 Q 637.5 421 637.5 413 L 637.5 279 Q 637.5 271 645.5 271 L 670 271" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 605 421 L 670 421" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 605 421 L 629.5 421 Q 637.5 421 637.5 429 L 637.5 563 Q 637.5 571 645.5 571 L 670 571" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 846 421 L 867 421 Q 875 421 875 413 L 875 214 Q 875 206 883 206 L 910 206" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 846 421 L 870 421 Q 878 421 878 413 L 878 409 Q 878 401 886 401 L 910 401" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 846 421 L 867 421 Q 875 421 875 429 L 875 588 Q 875 596 883 596 L 910 596" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 1074 206 L 1111.5 206 Q 1119.5 206 1119.5 198 L 1119.5 189 Q 1119.5 181 1127.5 181 L 1165 181" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 1090 401 L 1119.5 401 Q 1127.5 401 1127.5 393 L 1127.5 349 Q 1127.5 341 1135.5 341 L 1165 341" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 1090 401 L 1119.5 401 Q 1127.5 401 1127.5 409 L 1127.5 458 Q 1127.5 466 1135.5 466 L 1165 466" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path d="M 1074 596 L 1111.5 596 Q 1119.5 596 1119.5 604 L 1119.5 618 Q 1119.5 626 1127.5 626 L 1165 626" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path d="M 846 271 L 1117 271 Q 1125 271 1125 263 L 1125 189 Q 1125 181 1133 181 L 1165 181" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 846 271 L 1117 271 Q 1125 271 1125 279 L 1125 333 Q 1125 341 1133 341 L 1165 341" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 846 271 L 1102 271 Q 1110 271 1110 279 L 1110 618 Q 1110 626 1118 626 L 1165 626" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 1355 341 L 1358.75 341 Q 1362.5 341 1362.5 344.75 L 1362.5 442.25 Q 1362.5 446 1366.25 446 L 1370 446" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 1355 466 L 1358.75 466 Q 1362.5 466 1362.5 462.25 L 1362.5 449.75 Q 1362.5 446 1366.25 446 L 1370 446" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path d="M 846 571 L 1017 571 Q 1025 571 1025 579 L 1025 692 Q 1025 700 1033 700 L 1352 700 Q 1360 700 1360 692 L 1360 636 Q 1360 631 1365 631 L 1370 631" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path d="M 670 571 L 645.5 571 Q 637.5 571 637.5 579 L 637.5 653 Q 637.5 661 629.5 661 L 605 661" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
 
         <!-- Components -->
-        <rect x="40" y="320" width="132" height="62" rx="6" class="c-mask"/>
-        <rect x="40" y="320" width="132" height="62" rx="6" class="c-external" stroke-width="1.5"/>
-        <text x="106" y="349" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admins / Users</text>
-        <text x="106" y="365" class="t-muted" font-size="9" text-anchor="middle">Browser access</text>
+        <rect x="40" y="390" width="132" height="62" rx="6" class="c-mask"/>
+        <rect x="40" y="390" width="132" height="62" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="106" y="419" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Admins / Users</text>
+        <text x="106" y="435" class="t-muted" font-size="9" text-anchor="middle">portal, desktop, API</text>
 
-        <rect x="232" y="320" width="154" height="62" rx="6" class="c-mask"/>
-        <rect x="232" y="320" width="154" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
-        <text x="309" y="349" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Frontend Console</text>
-        <text x="309" y="365" class="t-muted" font-size="9" text-anchor="middle">React 19 + Vite</text>
+        <rect x="225" y="390" width="150" height="62" rx="6" class="c-mask"/>
+        <rect x="225" y="390" width="150" height="62" rx="6" class="c-frontend" stroke-width="1.5"/>
+        <text x="300" y="419" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Console UI</text>
+        <text x="300" y="435" class="t-muted" font-size="9" text-anchor="middle">instances, modes, policy</text>
 
-        <rect x="452" y="320" width="154" height="62" rx="6" class="c-mask"/>
-        <rect x="452" y="320" width="154" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="529" y="349" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Go API Server</text>
-        <text x="529" y="365" class="t-muted" font-size="9" text-anchor="middle">Gin /api/v1</text>
-        <text x="529" y="374" class="t-backend" font-size="7" text-anchor="middle">:9001</text>
+        <rect x="435" y="390" width="170" height="62" rx="6" class="c-mask"/>
+        <rect x="435" y="390" width="170" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="520" y="419" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">ClawManager API</text>
+        <text x="520" y="435" class="t-muted" font-size="9" text-anchor="middle">Go / Gin /api/v1</text>
+        <text x="520" y="444" class="t-backend" font-size="7" text-anchor="middle">:9001</text>
 
-        <rect x="452" y="170" width="154" height="62" rx="6" class="c-mask"/>
-        <rect x="452" y="170" width="154" height="62" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="529" y="199" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Auth + RBAC</text>
-        <text x="529" y="215" class="t-muted" font-size="9" text-anchor="middle">JWT middleware</text>
+        <rect x="435" y="190" width="170" height="62" rx="6" class="c-mask"/>
+        <rect x="435" y="190" width="170" height="62" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="520" y="219" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Policy Model</text>
+        <text x="520" y="235" class="t-muted" font-size="9" text-anchor="middle">tenant, nodegroup, egress</text>
 
-        <rect x="672" y="190" width="164" height="62" rx="6" class="c-mask"/>
-        <rect x="672" y="190" width="164" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="754" y="219" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Instance Services</text>
-        <text x="754" y="235" class="t-muted" font-size="9" text-anchor="middle">instances, teams, quotas</text>
+        <rect x="435" y="630" width="170" height="62" rx="6" class="c-mask"/>
+        <rect x="435" y="630" width="170" height="62" rx="6" class="c-database" stroke-width="1.5"/>
+        <text x="520" y="659" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">State + Audit</text>
+        <text x="520" y="675" class="t-muted" font-size="9" text-anchor="middle">MySQL, MinIO, Redis</text>
 
-        <rect x="672" y="320" width="164" height="62" rx="6" class="c-mask"/>
-        <rect x="672" y="320" width="164" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="754" y="349" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Agent Control Plane</text>
-        <text x="754" y="365" class="t-muted" font-size="9" text-anchor="middle">state, commands, heartbeats</text>
+        <rect x="670" y="240" width="176" height="62" rx="6" class="c-mask"/>
+        <rect x="670" y="240" width="176" height="62" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="758" y="269" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Access Gateway</text>
+        <text x="758" y="285" class="t-muted" font-size="9" text-anchor="middle">private entry, share link</text>
 
-        <rect x="672" y="450" width="164" height="62" rx="6" class="c-mask"/>
-        <rect x="672" y="450" width="164" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
-        <text x="754" y="479" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Resource Management</text>
-        <text x="754" y="495" class="t-muted" font-size="9" text-anchor="middle">channels, skills, bundles</text>
+        <rect x="670" y="390" width="176" height="62" rx="6" class="c-mask"/>
+        <rect x="670" y="390" width="176" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="758" y="419" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Runtime Adapter Interface</text>
+        <text x="758" y="435" class="t-muted" font-size="9" text-anchor="middle">Create, Start, Stop, Status</text>
+        <text x="758" y="444" class="t-backend" font-size="7" text-anchor="middle">mode dispatch</text>
 
-        <rect x="902" y="320" width="164" height="62" rx="6" class="c-mask"/>
-        <rect x="902" y="320" width="164" height="62" rx="6" class="c-security" stroke-width="1.5"/>
-        <text x="984" y="349" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AI Gateway</text>
-        <text x="984" y="365" class="t-muted" font-size="9" text-anchor="middle">routing, risk, audit</text>
+        <rect x="670" y="540" width="176" height="62" rx="6" class="c-mask"/>
+        <rect x="670" y="540" width="176" height="62" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="758" y="569" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AI Gateway</text>
+        <text x="758" y="585" class="t-muted" font-size="9" text-anchor="middle">model route, risk, trace</text>
 
-        <rect x="672" y="610" width="164" height="62" rx="6" class="c-mask"/>
-        <rect x="672" y="610" width="164" height="62" rx="6" class="c-database" stroke-width="1.5"/>
-        <text x="754" y="639" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">State Stores</text>
-        <text x="754" y="655" class="t-muted" font-size="9" text-anchor="middle">MySQL, MinIO, Redis</text>
+        <rect x="910" y="175" width="164" height="62" rx="6" class="c-mask"/>
+        <rect x="910" y="175" width="164" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="992" y="204" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lite Backend</text>
+        <text x="992" y="220" class="t-muted" font-size="9" text-anchor="middle">shared runtime pool</text>
 
-        <rect x="902" y="500" width="164" height="62" rx="6" class="c-mask"/>
-        <rect x="902" y="500" width="164" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="984" y="529" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Kubernetes API</text>
-        <text x="984" y="545" class="t-muted" font-size="9" text-anchor="middle">Deployment, Service, PVC</text>
+        <rect x="910" y="370" width="180" height="62" rx="6" class="c-mask"/>
+        <rect x="910" y="370" width="180" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="1000" y="399" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Isolated Gateway Backend</text>
+        <text x="1000" y="415" class="t-muted" font-size="9" text-anchor="middle">no desktop, strong egress</text>
 
-        <rect x="1120" y="210" width="174" height="64" rx="6" class="c-mask"/>
-        <rect x="1120" y="210" width="174" height="64" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="1207" y="240" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lite Runtime Pool</text>
-        <text x="1207" y="256" class="t-muted" font-size="9" text-anchor="middle">shared runtime Pods</text>
+        <rect x="910" y="565" width="164" height="62" rx="6" class="c-mask"/>
+        <rect x="910" y="565" width="164" height="62" rx="6" class="c-backend" stroke-width="1.5"/>
+        <text x="992" y="594" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Pro Backend</text>
+        <text x="992" y="610" class="t-muted" font-size="9" text-anchor="middle">desktop runtime</text>
 
-        <rect x="1120" y="430" width="174" height="64" rx="6" class="c-mask"/>
-        <rect x="1120" y="430" width="174" height="64" rx="6" class="c-cloud" stroke-width="1.5"/>
-        <text x="1207" y="460" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Pro / Isolated Runtime</text>
-        <text x="1207" y="476" class="t-muted" font-size="9" text-anchor="middle">dedicated Pods + workspace</text>
+        <rect x="1165" y="150" width="190" height="62" rx="6" class="c-mask"/>
+        <rect x="1165" y="150" width="190" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="1260" y="179" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Lite Runtime Pool</text>
+        <text x="1260" y="195" class="t-muted" font-size="9" text-anchor="middle">many gateways per Pod</text>
 
-        <rect x="1120" y="640" width="174" height="64" rx="6" class="c-mask"/>
-        <rect x="1120" y="640" width="174" height="64" rx="6" class="c-external" stroke-width="1.5"/>
-        <text x="1207" y="670" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Model Providers</text>
-        <text x="1207" y="686" class="t-muted" font-size="9" text-anchor="middle">external or secure models</text>
+        <rect x="1165" y="310" width="190" height="62" rx="6" class="c-mask"/>
+        <rect x="1165" y="310" width="190" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="1260" y="339" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">agent-sandbox Runtime</text>
+        <text x="1260" y="355" class="t-muted" font-size="9" text-anchor="middle">Sandbox CRD / warm pool</text>
+
+        <rect x="1165" y="435" width="190" height="62" rx="6" class="c-mask"/>
+        <rect x="1165" y="435" width="190" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="1260" y="464" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Native Pod Fallback</text>
+        <text x="1260" y="480" class="t-muted" font-size="9" text-anchor="middle">Pod, Service, NetworkPolicy</text>
+        <text x="1260" y="489" class="t-cloud" font-size="7" text-anchor="middle">dev fallback</text>
+
+        <rect x="1165" y="595" width="190" height="62" rx="6" class="c-mask"/>
+        <rect x="1165" y="595" width="190" height="62" rx="6" class="c-cloud" stroke-width="1.5"/>
+        <text x="1260" y="624" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Pro Desktop Runtime</text>
+        <text x="1260" y="640" class="t-muted" font-size="9" text-anchor="middle">Pod, PVC, web desktop</text>
+
+        <rect x="1370" y="410" width="136" height="72" rx="6" class="c-mask"/>
+        <rect x="1370" y="410" width="136" height="72" rx="6" class="c-security" stroke-width="1.5"/>
+        <text x="1438" y="444" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Egress Enforcement</text>
+        <text x="1438" y="460" class="t-muted" font-size="9" text-anchor="middle">proxy, CNI, NetworkPolicy</text>
+
+        <rect x="1370" y="595" width="136" height="72" rx="6" class="c-mask"/>
+        <rect x="1370" y="595" width="136" height="72" rx="6" class="c-external" stroke-width="1.5"/>
+        <text x="1438" y="629" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Model Providers</text>
+        <text x="1438" y="645" class="t-muted" font-size="9" text-anchor="middle">regular or secure models</text>
 
         <!-- Connection labels -->
-        <rect x="180.2" y="331" width="43.6" height="14" rx="3" class="c-mask"/>
-        <text x="202" y="341" class="t-backend" font-size="8" text-anchor="middle">Browser</text>
-        <rect x="392.4" y="331" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-        <text x="419" y="341" class="t-backend" font-size="8" text-anchor="middle">REST + WS</text>
-        <rect x="504.8" y="248" width="48.4" height="14" rx="3" class="c-mask"/>
-        <text x="529" y="258" class="t-security" font-size="8" text-anchor="middle">JWT/RBAC</text>
-        <rect x="617.2" y="266" width="43.6" height="14" rx="3" class="c-mask"/>
-        <text x="639" y="276" class="t-muted" font-size="8" text-anchor="middle">operate</text>
-        <rect x="602.8" y="386" width="72.4" height="14" rx="3" class="c-mask"/>
-        <text x="639" y="396" class="t-backend" font-size="8" text-anchor="middle">desired state</text>
-        <rect x="612.4" y="396" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-        <text x="639" y="406" class="t-muted" font-size="8" text-anchor="middle">resources</text>
-        <rect x="713.8" y="102" width="72.4" height="14" rx="3" class="c-mask"/>
-        <text x="750" y="112" class="t-security" font-size="8" text-anchor="middle">gateway admin</text>
-        <rect x="659.8" y="411" width="48.4" height="14" rx="3" class="c-mask"/>
-        <text x="684" y="421" class="t-muted" font-size="8" text-anchor="middle">metadata</text>
-        <rect x="787" y="541" width="82" height="14" rx="3" class="c-mask"/>
-        <text x="828" y="551" class="t-muted" font-size="8" text-anchor="middle">objects + scans</text>
-        <rect x="873.4" y="420" width="101.2" height="14" rx="3" class="c-mask"/>
-        <text x="924" y="430" class="t-security" font-size="8" text-anchor="middle">trace / cost / risk</text>
-        <rect x="830.4" y="421" width="77.2" height="14" rx="3" class="c-mask"/>
-        <text x="869" y="431" class="t-backend" font-size="8" text-anchor="middle">deploy / scale</text>
-        <rect x="1056.6" y="386" width="62.8" height="14" rx="3" class="c-mask"/>
-        <text x="1088" y="396" class="t-muted" font-size="8" text-anchor="middle">shared Pods</text>
-        <rect x="1054.4" y="566" width="77.2" height="14" rx="3" class="c-mask"/>
-        <text x="1093" y="576" class="t-muted" font-size="8" text-anchor="middle">dedicated Pods</text>
-        <rect x="1064" y="294" width="58" height="14" rx="3" class="c-mask"/>
-        <text x="1093" y="304" class="t-security" font-size="8" text-anchor="middle">OpenAI API</text>
-        <rect x="1064" y="395" width="58" height="14" rx="3" class="c-mask"/>
-        <text x="1093" y="405" class="t-security" font-size="8" text-anchor="middle">OpenAI API</text>
-        <rect x="1056.6" y="565" width="62.8" height="14" rx="3" class="c-mask"/>
-        <text x="1088" y="575" class="t-backend" font-size="8" text-anchor="middle">route model</text>
+        <rect x="176.7" y="401" width="43.6" height="14" rx="3" class="c-mask"/>
+        <text x="198.5" y="411" class="t-backend" font-size="8" text-anchor="middle">Browser</text>
+        <rect x="378.4" y="401" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+        <text x="405" y="411" class="t-backend" font-size="8" text-anchor="middle">REST + WS</text>
+        <rect x="476.6" y="302" width="86.8" height="14" rx="3" class="c-mask"/>
+        <text x="520" y="312" class="t-security" font-size="8" text-anchor="middle">effective policy</text>
+        <rect x="495.8" y="538" width="48.4" height="14" rx="3" class="c-mask"/>
+        <text x="520" y="548" class="t-muted" font-size="8" text-anchor="middle">metadata</text>
+        <rect x="620.6" y="322" width="38.8" height="14" rx="3" class="c-mask"/>
+        <text x="640" y="332" class="t-security" font-size="8" text-anchor="middle">access</text>
+        <rect x="601.8" y="456" width="72.4" height="14" rx="3" class="c-mask"/>
+        <text x="638" y="466" class="t-backend" font-size="8" text-anchor="middle">mode dispatch</text>
+        <rect x="596.6" y="512" width="86.8" height="14" rx="3" class="c-mask"/>
+        <text x="640" y="522" class="t-security" font-size="8" text-anchor="middle">model governance</text>
+        <rect x="860" y="274" width="30" height="14" rx="3" class="c-mask"/>
+        <text x="875" y="284" class="t-muted" font-size="8" text-anchor="middle">lite</text>
+        <rect x="853.8" y="391" width="48.4" height="14" rx="3" class="c-mask"/>
+        <text x="878" y="401" class="t-security" font-size="8" text-anchor="middle">isolated</text>
+        <rect x="860" y="512" width="30" height="14" rx="3" class="c-mask"/>
+        <text x="875" y="522" class="t-muted" font-size="8" text-anchor="middle">pro</text>
+        <rect x="1078.5" y="173.5" width="82" height="14" rx="3" class="c-mask"/>
+        <text x="1119.5" y="183.5" class="t-muted" font-size="8" text-anchor="middle">gateway process</text>
+        <rect x="1096.6" y="338" width="62.8" height="14" rx="3" class="c-mask"/>
+        <text x="1128" y="348" class="t-backend" font-size="8" text-anchor="middle">Sandbox CRD</text>
+        <rect x="1103.8" y="462" width="48.4" height="14" rx="3" class="c-mask"/>
+        <text x="1128" y="472" class="t-messagebus" font-size="8" text-anchor="middle">fallback</text>
+        <rect x="1088.1" y="591" width="62.8" height="14" rx="3" class="c-mask"/>
+        <text x="1119.5" y="601" class="t-muted" font-size="8" text-anchor="middle">desktop Pod</text>
+        <rect x="998.8" y="261" width="72.4" height="14" rx="3" class="c-mask"/>
+        <text x="1035" y="271" class="t-security" font-size="8" text-anchor="middle">private route</text>
+        <rect x="998.8" y="290" width="72.4" height="14" rx="3" class="c-mask"/>
+        <text x="1035" y="300" class="t-security" font-size="8" text-anchor="middle">private route</text>
+        <rect x="991.8" y="678" width="72.4" height="14" rx="3" class="c-mask"/>
+        <text x="1028" y="688" class="t-security" font-size="8" text-anchor="middle">desktop route</text>
+        <rect x="1301.8" y="382" width="72.4" height="14" rx="3" class="c-mask"/>
+        <text x="1338" y="392" class="t-security" font-size="8" text-anchor="middle">egress policy</text>
+        <rect x="1299.4" y="501" width="77.2" height="14" rx="3" class="c-mask"/>
+        <text x="1338" y="511" class="t-security" font-size="8" text-anchor="middle">network policy</text>
+        <rect x="1125.8" y="690" width="120.39999999999999" height="14" rx="3" class="c-mask"/>
+        <text x="1186" y="700" class="t-backend" font-size="8" text-anchor="middle">OpenAI-compatible route</text>
+        <rect x="594.2" y="618" width="91.6" height="14" rx="3" class="c-mask"/>
+        <text x="640" y="628" class="t-security" font-size="8" text-anchor="middle">trace, risk, cost</text>
 
         <!-- Legend -->
-        <text x="40" y="791" class="t-primary" font-size="9" font-weight="600">Legend</text>
-        <rect x="40" y="796" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
-        <text x="60" y="804" class="t-muted" font-size="8">External</text>
-        <rect x="138" y="796" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
-        <text x="158" y="804" class="t-muted" font-size="8">Frontend</text>
-        <rect x="236" y="796" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
-        <text x="256" y="804" class="t-muted" font-size="8">Backend</text>
-        <rect x="329" y="796" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
-        <text x="349" y="804" class="t-muted" font-size="8">Security</text>
-        <rect x="427" y="796" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
-        <text x="447" y="804" class="t-muted" font-size="8">Database</text>
-        <rect x="525" y="796" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
-        <text x="545" y="804" class="t-muted" font-size="8">Cloud</text>
+        <text x="40" y="871" class="t-primary" font-size="9" font-weight="600">Legend</text>
+        <rect x="40" y="876" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+        <text x="60" y="884" class="t-muted" font-size="8">External</text>
+        <rect x="138" y="876" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+        <text x="158" y="884" class="t-muted" font-size="8">Frontend</text>
+        <rect x="236" y="876" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+        <text x="256" y="884" class="t-muted" font-size="8">Backend</text>
+        <rect x="329" y="876" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+        <text x="349" y="884" class="t-muted" font-size="8">Security</text>
+        <rect x="427" y="876" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+        <text x="447" y="884" class="t-muted" font-size="8">Database</text>
+        <rect x="525" y="876" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+        <text x="545" y="884" class="t-muted" font-size="8">Cloud</text>
       </svg>
     </div>
 
@@ -705,34 +745,37 @@
     <div class="cards">
       <div class="card">
         <div class="card-header">
-          <div class="card-dot cyan"></div>
-          <h3>Product surface</h3>
-        </div>
-        <ul>
-          <li>&bull; React console calls the Go /api/v1 backend over REST and WebSocket.</li>
-          <li>&bull; User-facing domains include instances, Team workspaces, runtime pools, AI Gateway, skills, and resource bundles.</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>Runtime control</h3>
+          <h3>Runtime split</h3>
         </div>
         <ul>
-          <li>&bull; Agent Control Plane tracks registration, heartbeat, desired state, command history, and runtime skill inventory.</li>
-          <li>&bull; Kubernetes services create Deployments, Services, PVCs, runtime pools, and dedicated runtime Pods.</li>
+          <li>&bull; Lite stays a high-density shared runtime pool for trusted low-risk work.</li>
+          <li>&bull; Isolated Gateway is a no-desktop agent runtime with stronger per-agent egress control.</li>
+          <li>&bull; Pro remains the dedicated desktop runtime for GUI and browser workloads.</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot rose"></div>
-          <h3>Governance path</h3>
+          <h3>Issue #1 architecture change</h3>
         </div>
         <ul>
-          <li>&bull; AI Gateway is the in-cluster model governance layer: model routing, risk rules, audit traces, and cost records.</li>
-          <li>&bull; Resource Management compiles channels, skills, bundles, injection snapshots, and security scan results into runtime configuration.</li>
+          <li>&bull; ClawManager owns product policy, lifecycle, gateway access, and audit.</li>
+          <li>&bull; Runtime Adapter Interface hides the backend choice behind Create / Start / Stop / Status.</li>
+          <li>&bull; Isolated Gateway prefers agent-sandbox Sandbox CRDs; native Pod fallback is kept for development or migration.</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-dot cyan"></div>
+          <h3>Governed execution path</h3>
+        </div>
+        <ul>
+          <li>&bull; Access Gateway keeps instances private and routes console access to the selected runtime.</li>
+          <li>&bull; AI Gateway provides model routing, risk decisions, trace records, and cost accounting.</li>
+          <li>&bull; Egress enforcement combines proxy, CNI, and NetworkPolicy capabilities according to runtime mode.</li>
         </ul>
       </div>
     </div>
